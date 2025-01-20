@@ -2,7 +2,7 @@
 db_path: data/graylink.db
 
 # 软链接配置
-symlink_base_path: data/media
+symlink_base_path: "/media/emby"
 
 # 文件模式配置
 file_patterns:
@@ -23,8 +23,11 @@ exclude_patterns:
 
 # 挂载点配置
 mount_points:
-  - "/mnt/gdrive"
-  - "/media/gdrive"
+  - "/mnt/9w/media/nastool"  # 本地挂载点
+
+# Google Drive路径映射
+gdrive_root_path: "/media/nastool"  # Google Drive中的根路径
+local_root_path: "/mnt/9w/media/nastool"  # 对应的本地挂载路径
 
 # Google Drive配置
 gdrive_client_id: "460886178493-iosmlmtfplblq1lreaunqk337s5jdtbn.apps.googleusercontent.com"
@@ -33,6 +36,14 @@ gdrive_token: {"access_token":"ya29.a0ARW5m772lyjvst5b3qJGM476E9HHNwgArGalw9XPuh
 gdrive_team_drive_id: null  # 团队硬盘ID，为null时访问个人硬盘
 gdrive_root_folder_id: null  # 根文件夹ID，为null时使用根目录
 gdrive_scope: "https://www.googleapis.com/auth/drive.readonly"  # API访问范围
+
+# Emby配置
+emby_host: http://localhost:8096
+emby_api_key: null  # 需要替换为实际的API密钥
+
+# 监控配置
+polling_interval: 3600  # 查询间隔(秒)，默认1小时
+query_buffer_time: 300  # 额外缓冲时间(秒)，默认5分钟
 
 # Emby配置
 emby_host: http://localhost:8096

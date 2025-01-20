@@ -34,6 +34,10 @@ class Config:
         "/media/gdrive"
     ])
     
+    # Google Drive路径映射
+    gdrive_root_path: str = "/media/nastool"
+    local_root_path: str = "/mnt/9w/media/nastool"
+    
     # Google Drive配置
     gdrive_client_id: str = ""
     gdrive_client_secret: str = ""
@@ -47,7 +51,8 @@ class Config:
     emby_api_key: Optional[str] = None
     
     # 监控配置
-    polling_interval: int = 300
+    polling_interval: int = 3600  # 查询间隔(秒)，默认1小时
+    query_buffer_time: int = 300  # 额外缓冲时间(秒)，默认5分钟
     
     def __post_init__(self):
         """初始化后处理"""

@@ -1,7 +1,6 @@
 import os
 import time
-import pickle
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List
 from datetime import datetime, timedelta
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -29,7 +28,8 @@ class GoogleDriveMonitor:
         self.db_manager = db_manager
         self.config = config
         self.on_file_change = on_file_change
-        self.service = None
+        self.drive_service = None
+        self.activity_service = None
         self.last_check_time = None
     
     def _load_credentials(self) -> None:
@@ -55,8 +55,9 @@ class GoogleDriveMonitor:
                     'expiry': creds.expiry.isoformat()
                 })
             
-            # 创建服务
-            self.service = build('drive', 'v3', credentials=creds)
+            # 创建Drive和Activity服务
+            self.drive_service = build('drive', 'v3', credentials=creds)
+            self.activity_service = build('driveactivity', 'v2', credentials=creds)
             logger.info("Google Drive API凭证加载成功")
             
         except Exception as e:
@@ -74,7 +75,7 @@ class GoogleDriveMonitor:
             Optional[Dict[str, Any]]: 文件信息字典
         """
         try:
-            file = self.service.files().get(
+            file = self.drive_service.files().get(
                 fileId=file_id,
                 fields='id, name, mimeType, modifiedTime, size, parents'
             ).execute()
@@ -109,7 +110,7 @@ class GoogleDriveMonitor:
             if 'parents' in file:
                 parent_id = file['parents'][0]
                 if parent_id != self.config.gdrive_root_folder_id:
-                    parent = self.service.files().get(
+                    parent = self.drive_service.files().get(
                         fileId=parent_id,
                         fields='id, name, parents'
                     ).execute()
@@ -117,82 +118,116 @@ class GoogleDriveMonitor:
                     if parent_path:
                         return os.path.join(parent_path, file['name'])
             
-            # 如果是根目录下的文件，直接返回
-            return os.path.join(self.config.mount_points[0], file['name'])
+            # 构建完整路径
+            full_path = os.path.join('/', file['name'])
+            
+            # 检查是否包含目标路径
+            if self.config.gdrive_root_path in full_path:
+                # 找到目标路径在完整路径中的位置
+                target_index = full_path.find(self.config.gdrive_root_path)
+                # 提取目标路径及其后面的部分
+                target_path = full_path[target_index:]
+                # 替换为本地路径
+                local_path = target_path.replace(self.config.gdrive_root_path, self.config.local_root_path)
+                return local_path
+            
+            return None
             
         except Exception as e:
             logger.error(f"构建本地路径失败 {file.get('id')}: {e}")
             return None
     
+    def _get_file_id_from_activity(self, target: Dict[str, Any]) -> Optional[str]:
+        """
+        从活动目标中提取文件ID
+        
+        Args:
+            target: 活动目标信息
+            
+        Returns:
+            Optional[str]: 文件ID
+        """
+        try:
+            if 'driveItem' in target:
+                # 从类似 "items/1234567" 的格式中提取ID
+                return target['driveItem']['name'].split('/')[-1]
+            return None
+        except Exception:
+            return None
+    
     def _check_changes(self) -> None:
         """检查文件变化"""
         try:
-            # 构建查询条件
-            query_parts = []
+            current_time = datetime.utcnow()
             
-            # 设置根目录查询
-            if self.config.gdrive_root_folder_id:
-                query_parts.append(f"'{self.config.gdrive_root_folder_id}' in parents")
-            
-            # 设置时间过滤
+            # 计算查询时间范围
             if self.last_check_time:
-                query_parts.append(f"modifiedTime > '{self.last_check_time.isoformat()}Z'")
+                # 使用上次检查时间作为起点
+                start_time = self.last_check_time
+            else:
+                # 首次运行时，查询一个完整周期加缓冲时间的范围
+                start_time = current_time - timedelta(
+                    seconds=self.config.polling_interval + self.config.query_buffer_time
+                )
             
-            # 组合查询条件
-            query = " and ".join(query_parts) if query_parts else None
-            
-            # 准备API调用参数
-            params = {
-                'fields': 'files(id, name, mimeType, modifiedTime, size, parents)',
-                'spaces': 'drive',
-                'q': query
+            # 构建查询请求
+            request = {
+                'pageSize': 100,  # 每页活动数量
+                'filter': f'''
+                    time >= "{start_time.isoformat()}Z"
+                    AND time <= "{current_time.isoformat()}Z"
+                '''
             }
-            
+
             # 如果指定了团队硬盘ID，添加相关参数
             if self.config.gdrive_team_drive_id:
-                params.update({
-                    'corpora': 'drive',
-                    'driveId': self.config.gdrive_team_drive_id,
-                    'includeItemsFromAllDrives': True,
-                    'supportsAllDrives': True
-                })
-            
-            # 获取文件列表
-            results = self.service.files().list(**params).execute()
-            
-            # 处理变化的文件
-            for file in results.get('files', []):
-                # 跳过Google文档类型
-                if file['mimeType'].startswith('application/vnd.google-apps'):
-                    continue
-                    
-                file_info = self._get_file_info(file['id'])
-                if not file_info:
-                    continue
-                
-                # 检查文件是否已存在于数据库
-                existing_info = self.db_manager.get_file_info(file_info['path'])
-                if existing_info:
-                    if existing_info['mtime'] == file_info['mtime']:
-                        logger.debug(f"文件未变化，跳过处理: {file_info['path']}")
-                        continue
-                    logger.info(f"更新文件记录: {file_info['path']}")
-                else:
-                    logger.info(f"新增文件记录: {file_info['path']}")
-                
-                # 更新数据库
-                self.db_manager.add_file(
-                    file_info['path'],
-                    file_info['size'],
-                    file_info['mtime']
+                request['ancestorName'] = f'items/{self.config.gdrive_team_drive_id}'
+
+            # 获取活动列表
+            response = self.activity_service.activity().query(body=request).execute()
+            activities = response.get('activities', [])
+
+            # 处理每个活动
+            for activity in activities:
+                # 获取活动时间
+                activity_time = datetime.fromisoformat(
+                    activity['timestamp'].replace('Z', '+00:00')
                 )
-                
-                # 通知文件变化
-                if self.on_file_change:
-                    self.on_file_change(file_info['path'])
-            
+
+                # 处理活动目标
+                for target in activity.get('targets', []):
+                    file_id = self._get_file_id_from_activity(target)
+                    if not file_id:
+                        continue
+
+                    # 获取文件信息
+                    file_info = self._get_file_info(file_id)
+                    if not file_info:
+                        continue
+
+                    # 检查文件是否已存在于数据库
+                    existing_info = self.db_manager.get_file_info(file_info['path'])
+                    if existing_info:
+                        if existing_info['mtime'] == file_info['mtime']:
+                            logger.debug(f"文件未变化，跳过处理: {file_info['path']}")
+                            continue
+                        logger.info(f"更新文件记录: {file_info['path']}")
+                    else:
+                        logger.info(f"新增文件记录: {file_info['path']}")
+
+                    # 更新数据库
+                    self.db_manager.add_file(
+                        file_info['path'],
+                        file_info['size'],
+                        file_info['mtime']
+                    )
+
+                    # 通知文件变化
+                    if self.on_file_change:
+                        self.on_file_change(file_info['path'])
+
             self.last_check_time = datetime.utcnow()
-            
+
         except Exception as e:
             logger.error(f"检查文件变化失败: {e}")
     
@@ -208,9 +243,12 @@ class GoogleDriveMonitor:
     
     def stop(self) -> None:
         """停止监控"""
-        if self.service:
-            self.service.close()
-            self.service = None
+        if self.drive_service:
+            self.drive_service.close()
+            self.drive_service = None
+        if self.activity_service:
+            self.activity_service.close()
+            self.activity_service = None
         logger.info("Google Drive监控已停止")
     
     def run_forever(self) -> None:

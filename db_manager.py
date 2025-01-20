@@ -52,14 +52,14 @@ class DatabaseManager:
             logger.error(f"数据库初始化失败: {e}")
             raise
     
-    def add_file(self, path: str, size: int, modified_time: datetime, file_hash: Optional[str] = None) -> bool:
+    def add_file(self, path: str, size: int, modified_time: float, file_hash: Optional[str] = None) -> bool:
         """
         添加或更新文件信息
         
         Args:
             path: 文件路径
             size: 文件大小
-            modified_time: 修改时间
+            modified_time: 修改时间（Unix时间戳）
             file_hash: 文件哈希值（可选）
             
         Returns:
@@ -68,10 +68,12 @@ class DatabaseManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                # 将时间戳转换为datetime对象
+                dt = datetime.fromtimestamp(modified_time)
                 cursor.execute('''
                 INSERT OR REPLACE INTO files (path, size, modified_time, hash, updated_at)
                 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ''', (path, size, modified_time.isoformat(), file_hash))
+                ''', (path, size, dt.isoformat(), file_hash))
                 conn.commit()
                 return True
         except sqlite3.Error as e:
