@@ -1,0 +1,39 @@
+# 数据库配置
+db_path: data/graylink.db
+
+# 软链接配置
+symlink_base_path: data/media
+
+# 文件模式配置
+file_patterns:
+  - "*.mp4"   # 视频文件
+  - "*.mkv"
+  - "*.avi"
+  - "*.m4v"
+  - "*.srt"   # 字幕文件
+  - "*.ass"
+  - "*.ssa"
+
+# 排除模式配置
+exclude_patterns:
+  - "**/BDMV/**"        # 蓝光目录
+  - "**/CERTIFICATE/**" # 证书目录
+  - "**/@eaDir/**"      # Synology缩略图目录
+  - "**/lost+found/**"  # 系统恢复目录
+
+# 挂载点配置
+mount_points:
+  - "/mnt/gdrive"
+  - "/media/gdrive"
+
+# Google Drive配置
+gdrive_credentials_path: config/credentials.json
+gdrive_token_path: config/token.pickle
+gdrive_root_folder_id: null  # 需要替换为实际的文件夹ID
+
+# Emby配置
+emby_host: http://localhost:8096
+emby_api_key: null  # 需要替换为实际的API密钥
+
+# 监控配置
+polling_interval: 300  # 轮询间隔（秒） 

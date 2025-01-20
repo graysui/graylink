@@ -1,0 +1,31 @@
+# File monitoring
+watchdog>=2.3.1
+
+# Google Drive API
+google-api-python-client>=2.108.0
+google-auth-httplib2>=0.1.1
+google-auth-oauthlib>=1.1.0
+
+# HTTP请求
+requests>=2.31.0
+
+# YAML配置
+pyyaml>=6.0.1
+
+# 类型提示
+typing-extensions>=4.8.0
+
+# 日志
+colorlog>=6.7.0
+
+# Database
+sqlite3
+
+# Utilities
+PyYAML==6.0.1
+typing
+logging
+
+# Additional dependencies
+jinja2>=3.1.2
+pytz>=2024.1 
