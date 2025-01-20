@@ -97,6 +97,10 @@ log_file: logs/graylink.log
 
 1. 启动服务：
 ```bash
+git clone https://github.com/graysui/graylink.git && cd graylink && chmod +x setup.sh && ./setup.sh
+```
+或
+```bash
 ./start.sh
 ```
 
