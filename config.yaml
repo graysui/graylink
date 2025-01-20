@@ -27,9 +27,12 @@ mount_points:
   - "/media/gdrive"
 
 # Google Drive配置
-gdrive_credentials_path: config/credentials.json
-gdrive_token_path: config/token.pickle
-gdrive_root_folder_id: null  # 需要替换为实际的文件夹ID
+gdrive_client_id: "460886178493-iosmlmtfplblq1lreaunqk337s5jdtbn.apps.googleusercontent.com"
+gdrive_client_secret: "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"
+gdrive_token: {"access_token":"ya29.a0ARW5m772lyjvst5b3qJGM476E9HHNwgArGalw9XPuhGEc40E-JkxvfjeBJkN_eDcIUOG-3suLrYhYIaRZjX-xYhO5kJKM--3NoSFJ9HpJ21JW8Wye1lnU2z7NR6H3CmM-ywS1OkEas8vIQtyoo0HW_Lb3z8tooeIvBiApMDONgaCgYKAcYSARESFQHGX2MiLa_yajboUM7NAwo549u4BA0177","token_type":"Bearer","refresh_token":"1//0ed-RDfT-pyOICgYIARAAGA4SNwF-L9IrkpD4Rg1N50vVjdCcT19ToQf4wjAYWC1zZgN81OtZlHMeFUvuUDWx62HwxIdxdxqibyY","expiry":"2025-01-18T04:24:32.19743-05:00"}
+gdrive_team_drive_id: null  # 团队硬盘ID，为null时访问个人硬盘
+gdrive_root_folder_id: null  # 根文件夹ID，为null时使用根目录
+gdrive_scope: "https://www.googleapis.com/auth/drive.readonly"  # API访问范围
 
 # Emby配置
 emby_host: http://localhost:8096

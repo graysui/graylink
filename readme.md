@@ -43,7 +43,7 @@
 
 1. 克隆仓库：
 ```bash
-git clone https://github.com/yourusername/graylink.git
+git clone https://github.com/graysui/graylink.git
 cd graylink
 ```
 

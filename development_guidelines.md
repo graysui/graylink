@@ -30,8 +30,6 @@ graylink/
 ├── config.py           # 配置文件
 ├── utils/              # 工具函数
 │   ├── logging_utils.py
-│   ├── file_utils.py
-│   └── network_utils.py
 └── README.md           # 项目文档
 ```
 

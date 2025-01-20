@@ -34,31 +34,34 @@ class GoogleDriveMonitor:
     
     def _load_credentials(self) -> None:
         """加载Google Drive API凭证"""
-        creds = None
-        
-        # 尝试从token文件加载凭证
-        if os.path.exists(self.config.gdrive_token_path):
-            with open(self.config.gdrive_token_path, 'rb') as token:
-                creds = pickle.load(token)
-        
-        # 如果没有有效凭证，则请求新凭证
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.config.gdrive_credentials_path,
-                    ['https://www.googleapis.com/auth/drive.readonly']
-                )
-                creds = flow.run_local_server(port=0)
+        try:
+            # 使用rclone格式的配置创建凭证
+            creds = Credentials(
+                token=self.config.gdrive_token['access_token'],
+                refresh_token=self.config.gdrive_token['refresh_token'],
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=self.config.gdrive_client_id,
+                client_secret=self.config.gdrive_client_secret,
+                expiry=datetime.strptime(self.config.gdrive_token['expiry'], "%Y-%m-%dT%H:%M:%S.%f%z")
+            )
             
-            # 保存凭证
-            with open(self.config.gdrive_token_path, 'wb') as token:
-                pickle.dump(creds, token)
-        
-        # 创建Drive API服务
-        self.service = build('drive', 'v3', credentials=creds)
-        logger.info("Google Drive API服务初始化成功")
+            # 如果凭证过期，刷新它
+            if creds.expired:
+                creds.refresh(Request())
+                # 更新配置中的token
+                self.config.gdrive_token.update({
+                    'access_token': creds.token,
+                    'refresh_token': creds.refresh_token,
+                    'expiry': creds.expiry.isoformat()
+                })
+            
+            # 创建服务
+            self.service = build('drive', 'v3', credentials=creds)
+            logger.info("Google Drive API凭证加载成功")
+            
+        except Exception as e:
+            logger.error(f"加载Google Drive API凭证失败: {e}")
+            raise
     
     def _get_file_info(self, file_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -124,22 +127,44 @@ class GoogleDriveMonitor:
     def _check_changes(self) -> None:
         """检查文件变化"""
         try:
-            # 设置查询参数
-            query = f"'{self.config.gdrive_root_folder_id}' in parents" if self.config.gdrive_root_folder_id else "root"
+            # 构建查询条件
+            query_parts = []
+            
+            # 设置根目录查询
+            if self.config.gdrive_root_folder_id:
+                query_parts.append(f"'{self.config.gdrive_root_folder_id}' in parents")
+            
+            # 设置时间过滤
             if self.last_check_time:
-                query += f" and modifiedTime > '{self.last_check_time.isoformat()}Z'"
+                query_parts.append(f"modifiedTime > '{self.last_check_time.isoformat()}Z'")
+            
+            # 组合查询条件
+            query = " and ".join(query_parts) if query_parts else None
+            
+            # 准备API调用参数
+            params = {
+                'fields': 'files(id, name, mimeType, modifiedTime, size, parents)',
+                'spaces': 'drive',
+                'q': query
+            }
+            
+            # 如果指定了团队硬盘ID，添加相关参数
+            if self.config.gdrive_team_drive_id:
+                params.update({
+                    'corpora': 'drive',
+                    'driveId': self.config.gdrive_team_drive_id,
+                    'includeItemsFromAllDrives': True,
+                    'supportsAllDrives': True
+                })
             
             # 获取文件列表
-            results = self.service.files().list(
-                q=query,
-                spaces='drive',
-                fields='files(id, name, mimeType, modifiedTime, size, parents)'
-            ).execute()
+            results = self.service.files().list(**params).execute()
             
             # 处理变化的文件
             for file in results.get('files', []):
+                # 跳过Google文档类型
                 if file['mimeType'].startswith('application/vnd.google-apps'):
-                    continue  # 跳过Google文档类型
+                    continue
                     
                 file_info = self._get_file_info(file['id'])
                 if not file_info:
