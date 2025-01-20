@@ -116,13 +116,13 @@ app = GrayLink('config.yaml')
     
     if [ "$1" = "scan" ]; then
         cmd+="
-app.full_scan()
+app._full_scan()
 "
-    fi
-    
-    cmd+="
+    else
+        cmd+="
 app.run()
 "
+    fi
     
     python -c "$cmd"
 }
@@ -163,8 +163,7 @@ from main import GrayLink
 import logging
 logging.basicConfig(level=logging.${log_level})
 app = GrayLink('${config}')
-app.full_scan()
-app.run()
+app._full_scan()
 "
                 exit $?
                 ;;

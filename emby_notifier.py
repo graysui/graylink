@@ -73,22 +73,29 @@ class EmbyNotifier:
             # 获取每个媒体库的详细配置
             for item in items:
                 library_id = item['Id']
-                config_response = self.session.get(
-                    f"{self.base_url}/Library/VirtualFolders/LibraryOptions",
-                    params={'libraryId': library_id}
-                )
-                config_response.raise_for_status()
+                try:
+                    config_response = self.session.get(
+                        f"{self.base_url}/Library/VirtualFolders/LibraryOptions",
+                        params={'libraryId': library_id}
+                    )
+                    config_response.raise_for_status()
+                    library_config = config_response.json()
+                except requests.RequestException as e:
+                    logger.warning(f"获取媒体库[{item['Name']}]配置失败: {e}")
+                    library_config = {}
                 
                 self.libraries[library_id] = {
                     'id': library_id,
                     'name': item['Name'],
                     'type': item.get('CollectionType', ''),
                     'paths': item.get('Paths', []),
-                    'config': config_response.json()
+                    'config': library_config
                 }
             
             self.last_libraries_update = current_time
-            logger.debug(f"媒体库缓存已更新，共{len(self.libraries)}个库")
+            logger.info(f"媒体库缓存已更新，共{len(self.libraries)}个库")
+            for lib in self.libraries.values():
+                logger.info(f"- {lib['name']} ({lib['type']}): {', '.join(lib['paths'])}")
             
         except Exception as e:
             logger.error(f"更新媒体库缓存失败: {e}")
@@ -154,8 +161,20 @@ class EmbyNotifier:
             # 查找相关的媒体库
             library = self._find_library_for_path(path)
             if not library:
-                logger.warning(f"未找到包含路径的媒体库: {path}")
-                return False
+                # 如果找不到对应的媒体库，尝试直接刷新路径
+                logger.warning(f"未找到包含路径的媒体库，尝试直接刷新: {path}")
+                response = self.session.post(
+                    f"{self.base_url}/Library/Media/Updated",
+                    json={
+                        'Updates': [{
+                            'Path': path,
+                            'UpdateType': "Deleted" if is_delete else "Modified"
+                        }]
+                    }
+                )
+                response.raise_for_status()
+                logger.info(f"媒体库刷新请求已发送: {path}")
+                return True
             
             # 构建更新请求
             update_type = "Deleted" if is_delete else "Modified"

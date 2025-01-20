@@ -53,4 +53,7 @@ gdrive_polling_interval: 3600  # Google Drive查询间隔(秒)，默认1小时
 gdrive_query_buffer_time: 300  # Google Drive查询缓冲时间(秒)，默认5分钟
 
 # 本地监控配置
-local_polling_interval: 300  # 本地文件轮询间隔（秒） 
+local_polling_interval: 300  # 本地文件轮询间隔（秒）
+
+# 线程池配置
+thread_pool_size: 8  # 设置8个线程 

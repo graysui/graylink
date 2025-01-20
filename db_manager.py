@@ -15,42 +15,148 @@ class DatabaseManager:
         self.db_path = db_path
         self._init_db()
     
-    def _init_db(self) -> None:
-        """初始化数据库表结构"""
+    def _get_connection(self):
+        """
+        获取数据库连接
+        
+        Returns:
+            sqlite3.Connection: 数据库连接对象
+        """
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # 创建文件信息表
-                cursor.execute('''
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row  # 使用字典形式返回结果
+            return conn
+        except sqlite3.Error as e:
+            logger.error(f"连接数据库失败: {e}")
+            raise
+    
+    def _init_db(self) -> None:
+        """初始化数据库"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 创建文件表
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     path TEXT UNIQUE NOT NULL,
                     size INTEGER NOT NULL,
-                    modified_time TIMESTAMP NOT NULL,
+                    modified_time TEXT NOT NULL,
                     hash TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 )
-                ''')
-                
-                # 创建软链接映射表
-                cursor.execute('''
+            """)
+            
+            # 创建软链接表
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS symlinks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_path TEXT NOT NULL,
                     link_path TEXT UNIQUE NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (source_path) REFERENCES files (path)
+                    created_at TEXT NOT NULL
                 )
-                ''')
-                
-                conn.commit()
-                logger.info("数据库初始化成功")
-                
-        except sqlite3.Error as e:
-            logger.error(f"数据库初始化失败: {e}")
-            raise
+            """)
+            
+            # 创建扫描状态表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS scan_status (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT UNIQUE NOT NULL,
+                    status TEXT NOT NULL,  -- 'pending', 'scanning', 'completed', 'failed'
+                    start_time TEXT,
+                    end_time TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            
+            conn.commit()
+            logger.info("数据库初始化成功")
+    
+    def update_scan_status(self, path: str, status: str, error: str = None) -> None:
+        """
+        更新目录扫描状态
+        
+        Args:
+            path: 目录路径
+            status: 状态 ('pending', 'scanning', 'completed', 'failed')
+            error: 错误信息
+        """
+        now = datetime.now().isoformat()
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO scan_status (path, status, error, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    status = ?,
+                    error = ?,
+                    updated_at = ?
+            """, (path, status, error, now, now, status, error, now))
+            
+            conn.commit()
+    
+    def get_scan_status(self, path: str) -> Dict[str, Any]:
+        """
+        获取目录扫描状态
+        
+        Args:
+            path: 目录路径
+            
+        Returns:
+            Dict[str, Any]: 扫描状态信息
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT path, status, error, start_time, end_time, created_at, updated_at
+                FROM scan_status
+                WHERE path = ?
+            """, (path,))
+            
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'path': row[0],
+                    'status': row[1],
+                    'error': row[2],
+                    'start_time': row[3],
+                    'end_time': row[4],
+                    'created_at': row[5],
+                    'updated_at': row[6]
+                }
+            return None
+    
+    def get_incomplete_scans(self) -> List[Dict[str, Any]]:
+        """
+        获取所有未完成的扫描
+        
+        Returns:
+            List[Dict[str, Any]]: 未完成的扫描列表
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT path, status, error, start_time, end_time, created_at, updated_at
+                FROM scan_status
+                WHERE status IN ('pending', 'scanning', 'failed')
+            """)
+            
+            return [{
+                'path': row[0],
+                'status': row[1],
+                'error': row[2],
+                'start_time': row[3],
+                'end_time': row[4],
+                'created_at': row[5],
+                'updated_at': row[6]
+            } for row in cursor.fetchall()]
     
     def add_file(self, path: str, size: int, modified_time: float, file_hash: Optional[str] = None) -> bool:
         """
@@ -66,14 +172,16 @@ class DatabaseManager:
             bool: 操作是否成功
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            now = datetime.now().isoformat()
+            with self._get_connection() as conn:
                 cursor = conn.cursor()
                 # 将时间戳转换为datetime对象
                 dt = datetime.fromtimestamp(modified_time)
-                cursor.execute('''
-                INSERT OR REPLACE INTO files (path, size, modified_time, hash, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ''', (path, size, dt.isoformat(), file_hash))
+                cursor.execute("""
+                    INSERT OR REPLACE INTO files 
+                    (path, size, modified_time, hash, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (path, size, dt.isoformat(), file_hash, now, now))
                 conn.commit()
                 return True
         except sqlite3.Error as e:

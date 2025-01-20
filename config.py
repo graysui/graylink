@@ -3,6 +3,9 @@ from typing import Set, List, Optional, Dict, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 import yaml
+import logging
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Config:
@@ -64,6 +67,9 @@ class Config:
     # 本地监控配置
     local_polling_interval: int = 300  # 本地文件轮询间隔（秒）
     
+    # 线程池配置
+    thread_pool_size: int = 4  # 线程池大小，默认4个线程
+    
     def __post_init__(self):
         """初始化后处理"""
         # 确保路径是绝对路径
@@ -110,6 +116,16 @@ class Config:
             raise ValueError("挂载点状态检查重试次数必须大于等于0")
         if self.mount_retry_delay < 1:
             raise ValueError("挂载点状态检查重试间隔必须大于0秒")
+        
+        # 验证线程池大小
+        if not isinstance(self.thread_pool_size, int):
+            logger.error("线程池大小必须是整数")
+            raise ValueError("线程池大小必须是整数")
+        if self.thread_pool_size < 1:
+            logger.error("线程池大小必须大于0")
+            raise ValueError("线程池大小必须大于0")
+        if self.thread_pool_size > 16:
+            logger.warning("线程池大小过大可能影响性能")
 
     @classmethod
     def load_from_yaml(cls, config_path: str) -> 'Config':
@@ -150,6 +166,32 @@ class Config:
         
         with open(config_path, 'w', encoding='utf-8') as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
+
+    def validate(self) -> bool:
+        """
+        验证配置是否有效
+        
+        Returns:
+            bool: 配置是否有效
+        """
+        try:
+            # ... existing code ...
+            
+            # 验证线程池大小
+            if not isinstance(self.thread_pool_size, int):
+                logger.error("线程池大小必须是整数")
+                return False
+            if self.thread_pool_size < 1:
+                logger.error("线程池大小必须大于0")
+                return False
+            if self.thread_pool_size > 16:
+                logger.warning("线程池大小过大可能影响性能")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"验证配置失败: {e}")
+            return False
 
 # 创建默认配置实例
 config = Config() 

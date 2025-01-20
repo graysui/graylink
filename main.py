@@ -33,42 +33,81 @@ class GrayLink:
         self.config_path = config_path
         logger.info("配置加载完成")
         
-        # 初始化组件
-        self.db_manager = DatabaseManager(self.config)
-        self.emby_notifier = EmbyNotifier(self.config)
-        self.symlink_manager = SymlinkManager(
-            db_manager=self.db_manager,
-            config=self.config,
-            on_symlink_change=self.emby_notifier.notify_file_change
-        )
+        # 初始化基础组件
+        self.db_manager = DatabaseManager(self.config.db_path)
         
-        # 初始化监控器
-        self.local_monitor = LocalMonitor(
-            db_manager=self.db_manager,
-            config=self.config,
-            on_file_change=self.symlink_manager.handle_file_change
-        )
-        self.gdrive_monitor = GoogleDriveMonitor(
-            self.db_manager,
-            self.config,
-            self.symlink_manager.handle_file_change
-        )
-        
-        # 初始化目录树生成器
-        self.snapshot_generator = SnapshotGenerator(
-            db_manager=self.db_manager,
-            config=self.config
-        )
-        
-        self.html_exporter = HtmlExporter(
-            db_manager=self.db_manager,
-            config=self.config
-        )
+        # 初始化标记
+        self._emby_notifier = None
+        self._symlink_manager = None
+        self._local_monitor = None
+        self._gdrive_monitor = None
+        self._snapshot_generator = None
+        self._html_exporter = None
         
         # 初始化线程
         self.local_monitor_thread: Optional[threading.Thread] = None
         self.gdrive_monitor_thread: Optional[threading.Thread] = None
         self._running = False
+    
+    @property
+    def emby_notifier(self) -> EmbyNotifier:
+        """获取Emby通知器实例"""
+        if self._emby_notifier is None:
+            self._emby_notifier = EmbyNotifier(self.config)
+        return self._emby_notifier
+    
+    @property
+    def symlink_manager(self) -> SymlinkManager:
+        """获取软链接管理器实例"""
+        if self._symlink_manager is None:
+            self._symlink_manager = SymlinkManager(
+                db_manager=self.db_manager,
+                config=self.config,
+                on_symlink_change=self.emby_notifier.notify_file_change if self._emby_notifier else None
+            )
+        return self._symlink_manager
+    
+    @property
+    def local_monitor(self) -> LocalMonitor:
+        """获取本地监控器实例"""
+        if self._local_monitor is None:
+            self._local_monitor = LocalMonitor(
+                db_manager=self.db_manager,
+                config=self.config,
+                on_file_change=self.symlink_manager.handle_file_change
+            )
+        return self._local_monitor
+    
+    @property
+    def gdrive_monitor(self) -> GoogleDriveMonitor:
+        """获取Google Drive监控器实例"""
+        if self._gdrive_monitor is None:
+            self._gdrive_monitor = GoogleDriveMonitor(
+                self.db_manager,
+                self.config,
+                self.symlink_manager.handle_file_change
+            )
+        return self._gdrive_monitor
+    
+    @property
+    def snapshot_generator(self) -> SnapshotGenerator:
+        """获取快照生成器实例"""
+        if self._snapshot_generator is None:
+            self._snapshot_generator = SnapshotGenerator(
+                db_manager=self.db_manager,
+                config=self.config
+            )
+        return self._snapshot_generator
+    
+    @property
+    def html_exporter(self) -> HtmlExporter:
+        """获取HTML导出器实例"""
+        if self._html_exporter is None:
+            self._html_exporter = HtmlExporter(
+                db_manager=self.db_manager,
+                config=self.config
+            )
+        return self._html_exporter
     
     def _setup_signal_handlers(self) -> None:
         """设置信号处理器"""
@@ -84,15 +123,24 @@ class GrayLink:
         try:
             logger.info("开始执行完整扫描...")
             
-            # 使用新的扫描方法
+            # 1. 清理无效的软链接
+            self.symlink_manager.cleanup()
+            
+            # 2. 扫描目录并更新数据库
             if not self.snapshot_generator.scan_directories():
-                logger.error("完整扫描失败")
+                logger.error("目录扫描失败")
                 return
                 
+            # 3. 根据数据库记录创建软链接
+            if not self.snapshot_generator.create_symlinks():
+                logger.error("创建软链接失败")
+                return
+            
             logger.info("完整扫描完成")
             
         except Exception as e:
-            logger.error(f"完整扫描失败: {e}")
+            logger.error(f"执行完整扫描失败: {e}")
+            return
     
     def start(self) -> None:
         """启动GrayLink"""
@@ -198,7 +246,9 @@ def main():
     # 创建命令行解析器
     parser = argparse.ArgumentParser(description="GrayLink - 文件监控和软链接管理工具")
     parser.add_argument("config", help="配置文件路径")
-    parser.add_argument("--full-scan", action="store_true", help="执行全量扫描")
+    parser.add_argument("--full-scan", action="store_true", help="执行完整扫描")
+    parser.add_argument("--export-html", metavar="PATH", help="导出HTML快照")
+    parser.add_argument("--export-json", metavar="PATH", help="导出JSON快照")
     
     # 解析命令行参数
     args = parser.parse_args()
@@ -212,9 +262,15 @@ def main():
         # 创建应用实例
         app = GrayLink(args.config)
         
-        # 如果指定了全量扫描选项
+        # 处理命令行选项
         if args.full_scan:
             app._full_scan()
+            sys.exit(0)
+        elif args.export_html:
+            app.export_html(args.export_html)
+            sys.exit(0)
+        elif args.export_json:
+            app.export_json(args.export_json)
             sys.exit(0)
         
         # 否则正常运行

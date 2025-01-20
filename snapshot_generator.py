@@ -1,6 +1,9 @@
 import os
 import time
-from typing import Dict, Any
+import threading
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any, List
 from utils.logging_utils import logger
 from db_manager import DatabaseManager
 from config import Config
@@ -20,14 +23,26 @@ class SnapshotGenerator:
         """
         self.db_manager = db_manager
         self.config = config
+        self.max_workers = self.config.thread_pool_size
         
         # 初始化统计信息
         self.total_files = 0
         self.total_size = 0
         self.start_time = 0
         
+        # 线程安全的计数器
+        self._file_count_lock = threading.Lock()
+        self._size_lock = threading.Lock()
+        
         # 确保软链接目录存在
         os.makedirs(self.config.symlink_base_path, exist_ok=True)
+    
+    def _increment_stats(self, size: int) -> None:
+        """线程安全地更新统计信息"""
+        with self._file_count_lock:
+            self.total_files += 1
+        with self._size_lock:
+            self.total_size += size
     
     def _create_symlink(self, source_path: str) -> None:
         """
@@ -90,12 +105,35 @@ class SnapshotGenerator:
         logger.debug(f"文件扩展名不匹配，跳过处理: {path}")
         return False
     
-    def _process_directory(self, path: str) -> None:
+    def _process_file(self, path: str) -> None:
+        """处理单个文件"""
+        try:
+            if not self._should_process_file(path):
+                return
+                
+            # 获取文件信息
+            stat = os.stat(path)
+            
+            # 更新统计信息
+            self._increment_stats(stat.st_size)
+            
+            # 更新数据库
+            self.db_manager.add_file(
+                path,
+                stat.st_size,
+                stat.st_mtime
+            )
+            
+        except Exception as e:
+            logger.error(f"处理文件失败 {path}: {e}")
+    
+    def _process_directory(self, path: str, executor: ThreadPoolExecutor) -> None:
         """
         处理目录
         
         Args:
             path: 目录路径
+            executor: 线程池执行器
         """
         try:
             # 获取目录内容
@@ -107,22 +145,11 @@ class SnapshotGenerator:
                 
                 if os.path.isdir(item_path):
                     # 递归处理子目录
-                    self._process_directory(item_path)
+                    self._process_directory(item_path, executor)
                     
-                elif os.path.isfile(item_path) and self._should_process_file(item_path):
-                    # 获取文件信息
-                    stat = os.stat(item_path)
-                    
-                    # 更新统计信息
-                    self.total_files += 1
-                    self.total_size += stat.st_size
-                    
-                    # 更新数据库
-                    self.db_manager.add_file(
-                        item_path,
-                        stat.st_size,
-                        stat.st_mtime
-                    )
+                elif os.path.isfile(item_path):
+                    # 提交文件处理任务到线程池
+                    executor.submit(self._process_file, item_path)
                     
         except Exception as e:
             logger.error(f"处理目录失败 {path}: {e}")
@@ -142,16 +169,22 @@ class SnapshotGenerator:
             files = self.db_manager.get_all_files()
             total_links = 0
             
-            # 为每个文件创建软链接
-            for file_info in files:
-                self._create_symlink(file_info['path'])
-                total_links += 1
+            # 使用线程池创建软链接
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # 提交所有软链接创建任务
+                futures = [executor.submit(self._create_symlink, file_info['path']) 
+                         for file_info in files]
+                
+                # 等待所有任务完成
+                for _ in futures:
+                    total_links += 1
             
             # 输出统计信息
             elapsed_time = time.time() - start_time
             logger.info(f"软链接创建完成:")
             logger.info(f"- 总链接数: {total_links}")
             logger.info(f"- 处理时间: {elapsed_time:.2f} 秒")
+            logger.info(f"- 处理速度: {total_links / elapsed_time:.2f} 链接/秒")
             
             return True
             
@@ -161,7 +194,7 @@ class SnapshotGenerator:
     
     def scan_directories(self) -> bool:
         """
-        扫描所有监控目录并处理文件，完成后创建软链接
+        扫描所有监控目录并处理文件
         
         Returns:
             bool: 是否成功
@@ -174,14 +207,22 @@ class SnapshotGenerator:
             self.total_files = 0
             self.total_size = 0
             
-            # 处理每个监控目录
-            for monitor_path in self.config.monitor_paths:
-                if not os.path.exists(monitor_path):
-                    logger.warning(f"监控目录不存在，跳过扫描: {monitor_path}")
-                    continue
+            # 创建线程池
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # 处理每个监控目录
+                for monitor_path in self.config.monitor_paths:
+                    if not os.path.exists(monitor_path):
+                        logger.warning(f"监控目录不存在，跳过扫描: {monitor_path}")
+                        continue
+                        
+                    logger.info(f"扫描目录: {monitor_path}")
                     
-                logger.info(f"扫描目录: {monitor_path}")
-                self._process_directory(monitor_path)
+                    try:
+                        # 处理目录
+                        self._process_directory(monitor_path, executor)
+                    except Exception as e:
+                        logger.error(f"扫描目录失败 {monitor_path}: {e}")
+                        continue
             
             # 输出统计信息
             elapsed_time = time.time() - self.start_time
@@ -189,11 +230,7 @@ class SnapshotGenerator:
             logger.info(f"- 总文件数: {self.total_files}")
             logger.info(f"- 总大小: {self.total_size / 1024 / 1024:.2f} MB")
             logger.info(f"- 扫描时间: {elapsed_time:.2f} 秒")
-            
-            # 扫描完成后创建软链接
-            if not self.create_symlinks():
-                logger.error("创建软链接失败")
-                return False
+            logger.info(f"- 处理速度: {self.total_files / elapsed_time:.2f} 文件/秒")
             
             return True
             
