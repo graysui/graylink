@@ -30,22 +30,23 @@ class GrayLink:
         
         # 加载配置
         self.config = Config.load_from_yaml(config_path)
+        self.config_path = config_path
         logger.info("配置加载完成")
         
         # 初始化组件
-        self.db_manager = DatabaseManager(self.config.db_path)
+        self.db_manager = DatabaseManager(self.config)
         self.emby_notifier = EmbyNotifier(self.config)
         self.symlink_manager = SymlinkManager(
-            self.db_manager,
-            self.config,
-            self.emby_notifier.notify_file_change
+            db_manager=self.db_manager,
+            config=self.config,
+            on_symlink_change=self.emby_notifier.notify_file_change
         )
         
         # 初始化监控器
         self.local_monitor = LocalMonitor(
-            self.db_manager,
-            self.config,
-            self.symlink_manager.handle_file_change
+            db_manager=self.db_manager,
+            config=self.config,
+            on_file_change=self.symlink_manager.handle_file_change
         )
         self.gdrive_monitor = GoogleDriveMonitor(
             self.db_manager,
@@ -55,12 +56,14 @@ class GrayLink:
         
         # 初始化目录树生成器
         self.snapshot_generator = SnapshotGenerator(
-            self.db_manager,
-            self.symlink_manager,
-            self.config
+            db_manager=self.db_manager,
+            config=self.config
         )
         
-        self.html_exporter = HtmlExporter(self.db_manager, self.config)
+        self.html_exporter = HtmlExporter(
+            db_manager=self.db_manager,
+            config=self.config
+        )
         
         # 初始化线程
         self.local_monitor_thread: Optional[threading.Thread] = None
@@ -76,34 +79,20 @@ class GrayLink:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
     
-    def full_scan(self) -> bool:
-        """
-        执行全量扫描
-        
-        Returns:
-            bool: 是否成功
-        """
+    def _full_scan(self) -> None:
+        """执行完整扫描"""
         try:
-            logger.info("开始执行全量扫描...")
+            logger.info("开始执行完整扫描...")
             
-            # 清理失效的软链接
-            self.symlink_manager.cleanup()
-            
-            # 扫描所有挂载点
-            for mount_point in self.config.mount_points:
-                if os.path.exists(mount_point):
-                    if not self.snapshot_generator.scan_directory(mount_point):
-                        logger.error(f"扫描目录失败: {mount_point}")
-                        return False
-                else:
-                    logger.warning(f"挂载点不存在，跳过扫描: {mount_point}")
-            
-            logger.info("全量扫描完成")
-            return True
+            # 使用新的扫描方法
+            if not self.snapshot_generator.scan_directories():
+                logger.error("完整扫描失败")
+                return
+                
+            logger.info("完整扫描完成")
             
         except Exception as e:
-            logger.error(f"全量扫描失败: {e}")
-            return False
+            logger.error(f"完整扫描失败: {e}")
     
     def start(self) -> None:
         """启动GrayLink"""
@@ -225,8 +214,7 @@ def main():
         
         # 如果指定了全量扫描选项
         if args.full_scan:
-            if not app.full_scan():
-                sys.exit(1)
+            app._full_scan()
             sys.exit(0)
         
         # 否则正常运行

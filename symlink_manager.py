@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Set, Optional, Callable
+from typing import Set, Optional, Callable, Tuple
 from utils.logging_utils import logger
 from db_manager import DatabaseManager
 from config import Config
@@ -11,14 +11,14 @@ class SymlinkManager:
     def __init__(self,
                  db_manager: DatabaseManager,
                  config: Config,
-                 on_symlink_change: Optional[Callable[[str], None]] = None):
+                 on_symlink_change: Optional[Callable[[str, bool], None]] = None):
         """
         初始化软链接管理器
         
         Args:
             db_manager: 数据库管理器实例
             config: 配置实例
-            on_symlink_change: 软链接变化回调函数（用于通知Emby）
+            on_symlink_change: 软链接变化回调函数（用于通知Emby），参数为(路径, 是否删除)
         """
         self.db_manager = db_manager
         self.base_path = os.path.abspath(config.symlink_base_path)
@@ -108,6 +108,9 @@ class SymlinkManager:
             # 如果已存在同名软链接，先删除
             if os.path.islink(link_path):
                 os.unlink(link_path)
+            elif os.path.exists(link_path):
+                logger.warning(f"目标路径已存在且不是软链接，跳过: {link_path}")
+                return None
             
             # 创建软链接
             os.symlink(source_path, link_path)
@@ -122,23 +125,68 @@ class SymlinkManager:
             logger.error(f"创建软链接失败 {source_path}: {e}")
             return None
     
-    def handle_file_change(self, path: str) -> None:
+    def _remove_symlink(self, link_path: str) -> bool:
+        """
+        删除软链接
+        
+        Args:
+            link_path: 软链接路径
+            
+        Returns:
+            bool: 是否成功删除
+        """
+        try:
+            if os.path.islink(link_path):
+                os.unlink(link_path)
+                logger.info(f"删除软链接: {link_path}")
+                
+                # 从数据库中删除
+                self.db_manager.remove_symlink(link_path)
+                
+                # 清理空目录
+                dir_path = os.path.dirname(link_path)
+                while dir_path != self.base_path:
+                    if not os.listdir(dir_path):
+                        os.rmdir(dir_path)
+                        logger.info(f"删除空目录: {dir_path}")
+                        dir_path = os.path.dirname(dir_path)
+                    else:
+                        break
+                
+                return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"删除软链接失败 {link_path}: {e}")
+            return False
+    
+    def handle_file_change(self, path: str, is_delete: bool = False) -> None:
         """
         处理文件变化
         
         Args:
             path: 变化的文件路径
+            is_delete: 是否是删除操作
         """
         try:
             # 检查是否需要处理该文件
             if not self._should_process_file(path):
                 return
             
-            # 创建软链接
-            link_path = self._create_symlink(path)
-            if link_path and self.on_symlink_change:
-                # 通知Emby刷新媒体库
-                self.on_symlink_change(link_path)
+            if is_delete:
+                # 查找并删除相关的软链接
+                symlinks = self.db_manager.get_symlinks_by_source(path)
+                for link_path in symlinks:
+                    if self._remove_symlink(link_path):
+                        # 通知Emby删除
+                        if self.on_symlink_change:
+                            self.on_symlink_change(link_path, True)
+            else:
+                # 创建或更新软链接
+                link_path = self._create_symlink(path)
+                if link_path and self.on_symlink_change:
+                    # 通知Emby更新
+                    self.on_symlink_change(link_path, False)
                 
         except Exception as e:
             logger.error(f"处理文件变化失败 {path}: {e}")
@@ -153,10 +201,10 @@ class SymlinkManager:
                     if os.path.islink(link_path):
                         # 检查软链接是否有效
                         if not os.path.exists(os.path.realpath(link_path)):
-                            logger.info(f"删除失效软链接: {link_path}")
-                            os.unlink(link_path)
-                            # 从数据库中删除
-                            self.db_manager.remove_symlink(link_path)
+                            if self._remove_symlink(link_path):
+                                # 通知Emby删除
+                                if self.on_symlink_change:
+                                    self.on_symlink_change(link_path, True)
             
             # 清理空目录
             for root, dirs, files in os.walk(self.base_path, topdown=False):
@@ -176,8 +224,7 @@ class SymlinkManager:
             self.cleanup()
             
             # 获取数据库中的所有文件
-            # TODO: 实现db_manager.list_all_files()方法
-            files = self.db_manager.list_all_files()
+            files = self.db_manager.get_all_files()
             
             # 重建软链接
             for file_info in files:

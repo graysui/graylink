@@ -205,18 +205,18 @@ class DatabaseManager:
             path: 文件路径
             
         Returns:
-            bool: 操作是否成功
+            bool: 是否成功
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                # 首先删除相关的软链接记录
-                cursor.execute('DELETE FROM symlinks WHERE source_path = ?', (path,))
-                # 然后删除文件记录
-                cursor.execute('DELETE FROM files WHERE path = ?', (path,))
-                conn.commit()
-                return True
-        except sqlite3.Error as e:
+                cursor.execute(
+                    "DELETE FROM files WHERE path = ?",
+                    (path,)
+                )
+                return cursor.rowcount > 0
+                
+        except Exception as e:
             logger.error(f"删除文件记录失败 {path}: {e}")
             return False
     
@@ -303,4 +303,27 @@ class DatabaseManager:
                 
         except Exception as e:
             logger.error(f"获取所有文件记录失败: {e}")
+            return []
+    
+    def get_symlinks_by_source(self, source_path: str) -> List[str]:
+        """
+        获取源文件对应的所有软链接
+        
+        Args:
+            source_path: 源文件路径
+            
+        Returns:
+            List[str]: 软链接路径列表
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT link_path FROM symlinks WHERE source_path = ?",
+                    (source_path,)
+                )
+                return [row[0] for row in cursor.fetchall()]
+                
+        except Exception as e:
+            logger.error(f"查询软链接失败 {source_path}: {e}")
             return [] 

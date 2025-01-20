@@ -30,8 +30,15 @@ class Config:
     
     # 挂载点配置
     mount_points: List[str] = field(default_factory=lambda: [
-        "/mnt/gdrive",
-        "/media/gdrive"
+        "/mnt/9w"  # 本地挂载点
+    ])
+    mount_check_interval: int = 60  # 挂载点状态检查间隔（秒）
+    mount_retry_count: int = 3      # 挂载点状态检查重试次数
+    mount_retry_delay: int = 5      # 挂载点状态检查重试间隔（秒）
+    
+    # 监控目录配置
+    monitor_paths: List[str] = field(default_factory=lambda: [
+        "/mnt/9w/media/nastool"  # 实际需要监控的目录
     ])
     
     # Google Drive路径映射
@@ -76,6 +83,33 @@ class Config:
             # 确保expiry是字符串格式
             if isinstance(self.gdrive_token['expiry'], datetime):
                 self.gdrive_token['expiry'] = self.gdrive_token['expiry'].isoformat()
+        
+        # 验证挂载点配置
+        if not self.mount_points:
+            raise ValueError("至少需要配置一个挂载点")
+        
+        # 确保挂载点路径是绝对路径
+        self.mount_points = [os.path.abspath(p) for p in self.mount_points]
+        
+        # 验证监控目录配置
+        if not self.monitor_paths:
+            raise ValueError("至少需要配置一个监控目录")
+        
+        # 确保监控目录是绝对路径
+        self.monitor_paths = [os.path.abspath(p) for p in self.monitor_paths]
+        
+        # 验证监控目录是否在挂载点下
+        for monitor_path in self.monitor_paths:
+            if not any(monitor_path.startswith(mount_point) for mount_point in self.mount_points):
+                raise ValueError(f"监控目录必须在挂载点下: {monitor_path}")
+        
+        # 验证挂载点状态检查参数
+        if self.mount_check_interval < 1:
+            raise ValueError("挂载点状态检查间隔必须大于0秒")
+        if self.mount_retry_count < 0:
+            raise ValueError("挂载点状态检查重试次数必须大于等于0")
+        if self.mount_retry_delay < 1:
+            raise ValueError("挂载点状态检查重试间隔必须大于0秒")
 
     @classmethod
     def load_from_yaml(cls, config_path: str) -> 'Config':

@@ -23,7 +23,14 @@ exclude_patterns:
 
 # 挂载点配置
 mount_points:
-  - "/mnt/9w/media/nastool"  # 本地挂载点
+  - "/mnt/9w"  # 本地挂载点
+mount_check_interval: 60  # 挂载点状态检查间隔（秒）
+mount_retry_count: 3      # 挂载点状态检查重试次数
+mount_retry_delay: 5      # 挂载点状态检查重试间隔（秒）
+
+# 监控目录配置
+monitor_paths:
+  - "/mnt/9w/media/nastool"  # 实际需要监控的目录
 
 # Google Drive路径映射
 gdrive_root_path: "/media/nastool"  # Google Drive中的根路径
