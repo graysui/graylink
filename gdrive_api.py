@@ -167,7 +167,7 @@ class GoogleDriveMonitor:
             else:
                 # 首次运行时，查询一个完整周期加缓冲时间的范围
                 start_time = current_time - timedelta(
-                    seconds=self.config.polling_interval + self.config.query_buffer_time
+                    seconds=self.config.gdrive_polling_interval + self.config.gdrive_query_buffer_time
                 )
             
             # 构建查询请求
@@ -260,7 +260,7 @@ class GoogleDriveMonitor:
                 # 检查文件变化
                 self._check_changes()
                 # 等待下一次检查
-                time.sleep(self.config.polling_interval)
+                time.sleep(self.config.gdrive_polling_interval)
                 
         except KeyboardInterrupt:
             logger.info("收到停止信号")

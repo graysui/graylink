@@ -50,9 +50,12 @@ class Config:
     emby_host: str = "http://localhost:8096"
     emby_api_key: Optional[str] = None
     
-    # 监控配置
-    polling_interval: int = 3600  # 查询间隔(秒)，默认1小时
-    query_buffer_time: int = 300  # 额外缓冲时间(秒)，默认5分钟
+    # Google Drive监控配置
+    gdrive_polling_interval: int = 3600  # Google Drive查询间隔(秒)，默认1小时
+    gdrive_query_buffer_time: int = 300  # Google Drive查询缓冲时间(秒)，默认5分钟
+    
+    # 本地监控配置
+    local_polling_interval: int = 300  # 本地文件轮询间隔（秒）
     
     def __post_init__(self):
         """初始化后处理"""

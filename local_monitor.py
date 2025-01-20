@@ -86,16 +86,16 @@ class LocalMonitor:
             on_file_change: 文件变化回调函数
         """
         self.db_manager = db_manager
-        self.mount_points = config.mount_points
-        self.polling_interval = config.polling_interval
+        self.config = config
         self.on_file_change = on_file_change
+        self.polling_interval = config.local_polling_interval
         
         # 创建文件事件处理器
         self.event_handler = FileEventHandler(db_manager, on_file_change)
         self.observer = Observer()
         
         # 为每个挂载点创建观察者
-        for mount_point in self.mount_points:
+        for mount_point in self.config.mount_points:
             if os.path.exists(mount_point):
                 self.observer.schedule(self.event_handler, mount_point, recursive=True)
                 logger.info(f"添加监控目录: {mount_point}")
@@ -105,7 +105,7 @@ class LocalMonitor:
     def _scan_files(self) -> None:
         """扫描所有文件"""
         try:
-            for mount_point in self.mount_points:
+            for mount_point in self.config.mount_points:
                 if not os.path.exists(mount_point):
                     logger.warning(f"挂载点不存在，跳过扫描: {mount_point}")
                     continue

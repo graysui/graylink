@@ -2,7 +2,7 @@
 db_path: data/graylink.db
 
 # 软链接配置
-symlink_base_path: "/media/emby"
+symlink_base_path: "/mnt/media"
 
 # 文件模式配置
 file_patterns:
@@ -38,16 +38,12 @@ gdrive_root_folder_id: null  # 根文件夹ID，为null时使用根目录
 gdrive_scope: "https://www.googleapis.com/auth/drive.readonly"  # API访问范围
 
 # Emby配置
-emby_host: http://localhost:8096
-emby_api_key: null  # 需要替换为实际的API密钥
+emby_host: http://152.67.215.214:8096
+emby_api_key: cef414e5c9c6426fa3c71f9a28153ebd  # 需要替换为实际的API密钥
 
-# 监控配置
-polling_interval: 3600  # 查询间隔(秒)，默认1小时
-query_buffer_time: 300  # 额外缓冲时间(秒)，默认5分钟
+# Google Drive监控配置
+gdrive_polling_interval: 3600  # Google Drive查询间隔(秒)，默认1小时
+gdrive_query_buffer_time: 300  # Google Drive查询缓冲时间(秒)，默认5分钟
 
-# Emby配置
-emby_host: http://localhost:8096
-emby_api_key: null  # 需要替换为实际的API密钥
-
-# 监控配置
-polling_interval: 300  # 轮询间隔（秒） 
+# 本地监控配置
+local_polling_interval: 300  # 本地文件轮询间隔（秒） 
