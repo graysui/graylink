@@ -1,11 +1,13 @@
 import os
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent, FileDeletedEvent
 from utils.logging_utils import logger
 from db_manager import DatabaseManager
 from config import Config
+from datetime import datetime
 
 class FileEventHandler(FileSystemEventHandler):
     """文件事件处理器"""
@@ -85,30 +87,39 @@ class FileEventHandler(FileSystemEventHandler):
                 if not os.path.isfile(path):
                     return
                 
-                # 获取文件信息
-                stat = os.stat(path)
-                file_info = {
-                    'path': path,
-                    'size': stat.st_size,
-                    'mtime': stat.st_mtime
-                }
-                
-                # 检查文件是否已存在于数据库
-                existing_info = self.db_manager.get_file_info(path)
-                if existing_info:
-                    if existing_info['mtime'] == file_info['mtime']:
-                        logger.debug(f"文件未变化，跳过处理: {path}")
-                        return
-                    logger.info(f"更新文件记录: {path}")
-                else:
-                    logger.info(f"新增文件记录: {path}")
-                
-                # 1. 更新数据库
-                self.db_manager.add_file(file_info['path'], file_info['size'], file_info['mtime'])
-                
-                # 2. 通知软链接管理器处理更新
-                if self.on_file_change:
-                    self.on_file_change(path, False)
+                try:
+                    # 获取文件信息
+                    stat = os.stat(path)
+                    mtime = stat.st_mtime if hasattr(stat, 'st_mtime') else time.time()
+                    size = stat.st_size if hasattr(stat, 'st_size') else 0
+                    
+                    file_info = {
+                        'path': path,
+                        'size': size,
+                        'mtime': mtime
+                    }
+                    
+                    # 检查文件是否已存在于数据库
+                    existing_info = self.db_manager.get_file_info(path)
+                    if existing_info and existing_info.get('mtime'):
+                        if existing_info.get('mtime') == file_info['mtime']:
+                            logger.debug(f"文件未变化，跳过处理: {path}")
+                            return
+                        logger.info(f"更新文件记录: {path}")
+                    else:
+                        logger.info(f"新增文件记录: {path}")
+                    
+                    # 1. 更新数据库
+                    self.db_manager.add_file(file_info['path'], file_info['size'], file_info['mtime'])
+                    
+                    # 2. 通知软链接管理器处理更新
+                    if self.on_file_change:
+                        self.on_file_change(path, False)
+                        
+                except (OSError, IOError) as e:
+                    logger.error(f"获取文件信息失败 {path}: {e}")
+                except Exception as e:
+                    logger.error(f"处理文件失败 {path}: {e}")
                     
         except Exception as e:
             logger.error(f"处理文件失败 {path}: {e}")
@@ -149,6 +160,12 @@ class LocalMonitor:
         self.event_handler = FileEventHandler(db_manager, config, on_file_change)
         self.observer = Observer()
         
+        # 创建线程池
+        self.executor = ThreadPoolExecutor(max_workers=self.config.thread_pool_size)
+        
+        # 进度统计
+        self._reset_stats()
+        
         # 检查挂载点状态
         available_mount_points = []
         for mount_point in self.config.mount_points:
@@ -172,48 +189,200 @@ class LocalMonitor:
             else:
                 logger.warning(f"监控目录不可用: {monitor_path}")
     
-    def _scan_files(self) -> None:
-        """扫描所有文件"""
-        try:
-            for monitor_path in self.config.monitor_paths:
-                if not os.path.exists(monitor_path):
-                    logger.warning(f"监控目录不存在，跳过扫描: {monitor_path}")
-                    continue
-                    
-                logger.info(f"开始扫描目录: {monitor_path}")
-                for root, _, files in os.walk(monitor_path):
-                    for name in files:
-                        path = os.path.join(root, name)
-                        self.event_handler._process_file(path, is_delete=False)
-                        
-            logger.info("目录扫描完成")
+    def _reset_stats(self) -> None:
+        """重置统计信息"""
+        self.total_files = 0  # 总文件数
+        self.processed_files = 0  # 已处理文件数
+        self.skipped_files = 0  # 跳过的文件数
+        self.error_files = 0  # 错误文件数
+        self.start_time = time.time()  # 开始时间
+        self.last_progress_time = time.time()  # 上次进度更新时间
+        self.last_processed_files = 0  # 上次已处理文件数
+    
+    def _log_progress(self, force: bool = False) -> None:
+        """
+        记录处理进度
+        
+        Args:
+            force: 是否强制记录，不考虑时间间隔
+        """
+        current_time = time.time()
+        time_elapsed = current_time - self.start_time
+        
+        # 使用配置中的进度日志更新间隔
+        if force or (current_time - self.last_progress_time) >= self.config.progress_interval:
+            # 计算处理速度（每秒处理文件数）
+            interval = current_time - self.last_progress_time
+            files_in_interval = self.processed_files - self.last_processed_files
+            speed = files_in_interval / interval if interval > 0 else 0
             
+            # 计算预计剩余时间
+            remaining_files = self.total_files - self.processed_files
+            eta = remaining_files / speed if speed > 0 else 0
+            
+            # 更新统计信息
+            self.last_progress_time = current_time
+            self.last_processed_files = self.processed_files
+            
+            # 记录进度日志
+            progress = (self.processed_files / self.total_files * 100) if self.total_files > 0 else 0
+            logger.info(
+                f"扫描进度: {progress:.1f}% "
+                f"({self.processed_files}/{self.total_files}) "
+                f"速度: {speed:.1f} 文件/秒 "
+                f"预计剩余时间: {eta:.0f}秒 "
+                f"跳过: {self.skipped_files} "
+                f"错误: {self.error_files}"
+            )
+    
+    def _process_files_batch(self, files: List[Dict[str, str]]) -> None:
+        """
+        并行处理一批文件
+        
+        Args:
+            files: 文件信息列表，每个文件包含 path 和 mtime
+        """
+        futures = []
+        for file_info in files:
+            future = self.executor.submit(self.event_handler._process_file, file_info['path'])
+            futures.append(future)
+        
+        # 等待所有任务完成
+        for future in as_completed(futures):
+            try:
+                future.result()  # 获取任务结果，如果有异常会在这里抛出
+                self.processed_files += 1
+            except Exception as e:
+                logger.error(f"并行处理文件失败: {e}")
+                self.error_files += 1
+            
+            # 更新进度
+            self._log_progress()
+    
+    def _scan_files(self) -> None:
+        """扫描所有监控目录下的文件变化"""
+        try:
+            # 重置统计信息
+            self._reset_stats()
+            
+            for monitor_path in self.config.monitor_paths:
+                # 检查挂载点状态
+                if not self.event_handler._is_mount_point_available(monitor_path):
+                    logger.warning(f"挂载点不可用，跳过扫描: {monitor_path}")
+                    continue
+                
+                # 获取上次扫描时间
+                last_scan_time = self.db_manager.get_last_scan_time(monitor_path)
+                if last_scan_time:
+                    logger.info(f"开始增量扫描目录: {monitor_path}，上次扫描时间: {last_scan_time}")
+                else:
+                    logger.info(f"开始首次扫描目录: {monitor_path}")
+                
+                # 首先统计需要处理的文件总数
+                logger.info(f"正在统计文件数量...")
+                for root, _, files in os.walk(monitor_path):
+                    for filename in files:
+                        file_path = os.path.join(root, filename)
+                        try:
+                            stat = os.stat(file_path)
+                            mtime = datetime.fromtimestamp(stat.st_mtime)
+                            if last_scan_time and mtime <= last_scan_time:
+                                self.skipped_files += 1
+                            else:
+                                self.total_files += 1
+                        except Exception:
+                            continue
+                
+                logger.info(f"找到 {self.total_files} 个文件需要处理，{self.skipped_files} 个文件将跳过")
+                
+                # 收集需要处理的文件
+                files_to_process = []
+                
+                # 遍历目录
+                for root, _, files in os.walk(monitor_path):
+                    for filename in files:
+                        file_path = os.path.join(root, filename)
+                        try:
+                            # 获取文件状态
+                            stat = os.stat(file_path)
+                            mtime = datetime.fromtimestamp(stat.st_mtime)
+                            
+                            # 如果有上次扫描记录，且文件未修改，则跳过
+                            if last_scan_time and mtime <= last_scan_time:
+                                continue
+                            
+                            # 添加到待处理列表
+                            files_to_process.append({
+                                'path': file_path,
+                                'mtime': mtime.isoformat()
+                            })
+                            
+                            # 当收集到足够的文件时，启动并行处理
+                            if len(files_to_process) >= self.config.batch_size:
+                                self._process_files_batch(files_to_process)
+                                files_to_process = []  # 清空列表
+                            
+                        except (OSError, IOError) as e:
+                            logger.error(f"获取文件状态失败 {file_path}: {e}")
+                            self.error_files += 1
+                        except Exception as e:
+                            logger.error(f"处理文件失败 {file_path}: {e}")
+                            self.error_files += 1
+                
+                # 处理剩余的文件
+                if files_to_process:
+                    self._process_files_batch(files_to_process)
+                
+                # 更新扫描时间
+                self.db_manager.update_scan_time(monitor_path)
+                
+                # 记录最终进度
+                self._log_progress(force=True)
+                
+                # 记录完成信息
+                total_time = time.time() - self.start_time
+                avg_speed = self.processed_files / total_time if total_time > 0 else 0
+                logger.info(
+                    f"完成目录扫描: {monitor_path}\n"
+                    f"总耗时: {total_time:.1f}秒\n"
+                    f"平均速度: {avg_speed:.1f} 文件/秒\n"
+                    f"处理文件: {self.processed_files}\n"
+                    f"跳过文件: {self.skipped_files}\n"
+                    f"错误文件: {self.error_files}"
+                )
+                
         except Exception as e:
             logger.error(f"扫描文件失败: {e}")
-    
+            
     def start(self) -> None:
         """启动监控"""
-        self.observer.start()
-        logger.info("本地文件监控已启动")
-    
+        try:
+            # 启动文件系统观察者
+            self.observer.start()
+            logger.info("启动文件系统监控")
+            
+            # 首次扫描
+            self._scan_files()
+            
+            # 定期扫描
+            while True:
+                time.sleep(self.polling_interval)
+                self._scan_files()
+                
+        except Exception as e:
+            logger.error(f"监控失败: {e}")
+            self.stop()
+            
     def stop(self) -> None:
         """停止监控"""
-        self.observer.stop()
-        self.observer.join()
-        logger.info("本地文件监控已停止")
-    
-    def run_forever(self) -> None:
-        """持续运行监控"""
         try:
-            self.start()
+            # 停止文件系统观察者
+            self.observer.stop()
+            self.observer.join()
             
-            while True:
-                # 执行定期扫描
-                self._scan_files()
-                # 等待下一次扫描
-                time.sleep(self.polling_interval)
-                
-        except KeyboardInterrupt:
-            logger.info("收到停止信号")
-        finally:
-            self.stop() 
+            # 关闭线程池
+            self.executor.shutdown(wait=True)
+            
+            logger.info("停止文件系统监控")
+        except Exception as e:
+            logger.error(f"停止监控失败: {e}") 

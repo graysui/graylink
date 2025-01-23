@@ -41,9 +41,10 @@ show_menu() {
     echo -e "${GREEN}4.${NC} 导出JSON快照"
     echo -e "${GREEN}5.${NC} 修改日志级别"
     echo -e "${GREEN}6.${NC} 查看帮助"
+    echo -e "${GREEN}7.${NC} 仅创建软链接（跳过扫描）"
     echo -e "${GREEN}0.${NC} 退出"
     echo
-    echo -e "${YELLOW}请选择操作 [0-6]:${NC} "
+    echo -e "${YELLOW}请选择操作 [0-7]:${NC} "
 }
 
 # 设置日志级别
@@ -101,12 +102,17 @@ run_service() {
     local cmd="
 from main import GrayLink
 import logging
+import os
 
+# 确保日志目录存在
+os.makedirs('logs', exist_ok=True)
+
+# 配置根日志器
 logging.basicConfig(
     level=logging.${level:-INFO},
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/graylink.log'),
+        logging.FileHandler('logs/graylink.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -117,6 +123,10 @@ app = GrayLink('config.yaml')
     if [ "$1" = "scan" ]; then
         cmd+="
 app._full_scan()
+"
+    elif [ "$1" = "create_symlinks" ]; then
+        cmd+="
+app._full_scan(skip_scan=True)
 "
     else
         cmd+="
@@ -240,6 +250,10 @@ main() {
                 ;;
             6)
                 show_help
+                ;;
+            7)
+                echo -e "${BLUE}正在创建软链接...${NC}"
+                run_service "create_symlinks"
                 ;;
             *)
                 echo -e "${RED}无效的选择${NC}"

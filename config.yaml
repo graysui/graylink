@@ -1,30 +1,48 @@
 # 数据库配置
-db_path: data/graylink.db
+db_path: "data/graylink.db"
 
 # 软链接配置
 symlink_base_path: "/mnt/media"
 
 # 文件模式配置
 file_patterns:
-  - "*.mp4"   # 视频文件
+  - "*.mp4"   # 常见视频格式
   - "*.mkv"
   - "*.avi"
   - "*.m4v"
-  - "*.srt"   # 字幕文件
-  - "*.ass"
-  - "*.ssa"
+  - "*.wmv"   # Windows Media Video
+  - "*.mov"   # QuickTime Movie
+  - "*.flv"   # Flash Video
+  - "*.rmvb"  # RealMedia Variable Bitrate
+  - "*.rm"    # RealMedia
+  - "*.3gp"   # 3GPP
+  - "*.ts"    # MPEG Transport Stream
+  - "*.webm"  # WebM
+  - "*.vob"   # DVD Video Object
+  - "*.mts"   # AVCHD
+  - "*.m2ts"  # Blu-ray MPEG-2 Transport Stream
+  - "*.mpg"   # MPEG-1
+  - "*.mpeg"  # MPEG-1
+  - "*.m1v"   # MPEG-1 Video
+  - "*.m2v"   # MPEG-2 Video
+  - "*.mp2"   # MPEG-2
+  - "*.asf"   # Advanced Systems Format
+  - "*.ogm"   # Ogg Media
+  - "*.ogv"   # Ogg Video
+  - "*.f4v"   # Flash MP4 Video
 
 # 排除模式配置
 exclude_patterns:
-  - "**/BDMV/**"        # 蓝光目录
-  - "**/CERTIFICATE/**" # 证书目录
-  - "**/@eaDir/**"      # Synology缩略图目录
-  - "**/lost+found/**"  # 系统恢复目录
+  - "**/BDMV/**"          # 蓝光目录
+  - "**/CERTIFICATE/**"    # 证书目录
+  - "**/@eaDir/**"        # Synology缩略图目录
+  - "**/lost+found/**"    # 系统恢复目录
 
 # 挂载点配置
 mount_points:
-  - "/mnt/9w"  # 本地挂载点
-mount_check_interval: 60  # 挂载点状态检查间隔（秒）
+  - "/mnt/9w"             # 本地挂载点
+  - "/mnt/media"          # 软链接挂载点
+mount_check_interval: 60   # 挂载点状态检查间隔（秒）
 mount_retry_count: 3      # 挂载点状态检查重试次数
 mount_retry_delay: 5      # 挂载点状态检查重试间隔（秒）
 
@@ -32,28 +50,27 @@ mount_retry_delay: 5      # 挂载点状态检查重试间隔（秒）
 monitor_paths:
   - "/mnt/9w/media/nastool"  # 实际需要监控的目录
 
-# Google Drive路径映射
-gdrive_root_path: "/media/nastool"  # Google Drive中的根路径
-local_root_path: "/mnt/9w/media/nastool"  # 对应的本地挂载路径
-
-# Google Drive配置
-gdrive_client_id: "460886178493-iosmlmtfplblq1lreaunqk337s5jdtbn.apps.googleusercontent.com"
-gdrive_client_secret: "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"
-gdrive_token: {"access_token":"ya29.a0ARW5m772lyjvst5b3qJGM476E9HHNwgArGalw9XPuhGEc40E-JkxvfjeBJkN_eDcIUOG-3suLrYhYIaRZjX-xYhO5kJKM--3NoSFJ9HpJ21JW8Wye1lnU2z7NR6H3CmM-ywS1OkEas8vIQtyoo0HW_Lb3z8tooeIvBiApMDONgaCgYKAcYSARESFQHGX2MiLa_yajboUM7NAwo549u4BA0177","token_type":"Bearer","refresh_token":"1//0ed-RDfT-pyOICgYIARAAGA4SNwF-L9IrkpD4Rg1N50vVjdCcT19ToQf4wjAYWC1zZgN81OtZlHMeFUvuUDWx62HwxIdxdxqibyY","expiry":"2025-01-18T04:24:32.19743-05:00"}
-gdrive_team_drive_id: null  # 团队硬盘ID，为null时访问个人硬盘
-gdrive_root_folder_id: null  # 根文件夹ID，为null时使用根目录
-gdrive_scope: "https://www.googleapis.com/auth/drive.readonly"  # API访问范围
+# Google Drive 配置
+enable_gdrive: true                                      # 是否启用 Google Drive 监控
+gdrive_root_path: "/media/nastool"                       # Google Drive 根路径
+local_root_path: "/mnt/9w/media/nastool"                 # 本地挂载路径
+gdrive_polling_interval: 3600                            # Google Drive查询间隔(秒)，默认1小时
+gdrive_query_buffer_time: 300                            # Google Drive查询缓冲时间(秒)，默认5分钟
+gdrive_client_id: "460886178493-iosmlmtfplblq1lreaunqk337s5jdtbn.apps.googleusercontent.com"                                     # Google Drive 客户端ID
+gdrive_client_secret: "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"                                 # Google Drive 客户端密钥
+gdrive_token: {"access_token":"ya29.a0ARW5m772lyjvst5b3qJGM476E9HHNwgArGalw9XPuhGEc40E-JkxvfjeBJkN_eDcIUOG-3suLrYhYIaRZjX-xYhO5kJKM--3NoSFJ9HpJ21JW8Wye1lnU2z7NR6H3CmM-ywS1OkEas8vIQtyoo0HW_Lb3z8tooeIvBiApMDONgaCgYKAcYSARESFQHGX2MiLa_yajboUM7NAwo549u4BA0177","token_type":"Bearer","refresh_token":"1//0ed-RDfT-pyOICgYIARAAGA4SNwF-L9IrkpD4Rg1N50vVjdCcT19ToQf4wjAYWC1zZgN81OtZlHMeFUvuUDWx62HwxIdxdxqibyY","expiry":"2025-01-18T04:24:32.19743-05:00"}                                         # Google Drive 访问令牌
+gdrive_team_drive_id: null                              # 团队云端硬盘ID
+gdrive_root_folder_id: null                             # 根文件夹ID
+gdrive_scope: "https://www.googleapis.com/auth/drive.readonly"  # API权限范围
 
 # Emby配置
-emby_host: http://152.67.215.214:8096
-emby_api_key: cef414e5c9c6426fa3c71f9a28153ebd  # 需要替换为实际的API密钥
-
-# Google Drive监控配置
-gdrive_polling_interval: 3600  # Google Drive查询间隔(秒)，默认1小时
-gdrive_query_buffer_time: 300  # Google Drive查询缓冲时间(秒)，默认5分钟
+emby_host: "http://152.67.215.214:8096"                       # Emby服务器地址
+emby_api_key: "cef414e5c9c6426fa3c71f9a28153ebd"                                       # Emby API密钥
 
 # 本地监控配置
-local_polling_interval: 300  # 本地文件轮询间隔（秒）
+local_polling_interval: 300                              # 本地文件轮询间隔（秒）
 
 # 线程池配置
-thread_pool_size: 8  # 设置8个线程 
+thread_pool_size: 8                                      # 线程池大小，默认为CPU核心数
+batch_size: 100                                          # 批处理文件数量
+progress_interval: 10                                     # 进度日志更新间隔（秒） 

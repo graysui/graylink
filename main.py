@@ -18,228 +18,240 @@ from html_exporter import HtmlExporter
 class GrayLink:
     """GrayLink主程序"""
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_file: str = 'config.yaml'):
         """
         初始化GrayLink
         
         Args:
-            config_path: 配置文件路径
+            config_file: 配置文件路径
         """
-        # 设置日志
+        # 设置日志系统
         setup_logging()
         
-        # 加载配置
-        self.config = Config.load_from_yaml(config_path)
-        self.config_path = config_path
+        self.config = Config.load_from_yaml(config_file)
         logger.info("配置加载完成")
         
-        # 初始化基础组件
         self.db_manager = DatabaseManager(self.config.db_path)
+        logger.info("数据库初始化成功")
         
-        # 初始化标记
-        self._emby_notifier = None
-        self._symlink_manager = None
+        # 组件初始化标记
         self._local_monitor = None
         self._gdrive_monitor = None
-        self._snapshot_generator = None
+        self._symlink_manager = None
         self._html_exporter = None
         
-        # 初始化线程
-        self.local_monitor_thread: Optional[threading.Thread] = None
-        self.gdrive_monitor_thread: Optional[threading.Thread] = None
-        self._running = False
+        # 监控线程列表
+        self._monitor_threads = []
+        
+        # 停止标志
+        self._stop_flag = threading.Event()
     
-    @property
-    def emby_notifier(self) -> EmbyNotifier:
-        """获取Emby通知器实例"""
-        if self._emby_notifier is None:
-            self._emby_notifier = EmbyNotifier(self.config)
-        return self._emby_notifier
+    def _init_monitoring_components(self):
+        """初始化监控相关组件"""
+        try:
+            # 初始化软链接管理器
+            if self._symlink_manager is None:
+                self._symlink_manager = SymlinkManager(
+                    self.db_manager,
+                    self.config
+                )
+            
+            # 初始化本地监控器
+            if self._local_monitor is None:
+                self._local_monitor = LocalMonitor(
+                    self.db_manager,
+                    self.config,
+                    self._symlink_manager.handle_file_change
+                )
+            
+            # 初始化Google Drive监控器
+            if self.config.enable_gdrive and self._gdrive_monitor is None:
+                self._gdrive_monitor = GoogleDriveMonitor(
+                    self.config.gdrive_root_path,
+                    self.db_manager,
+                    self.config
+                )
+                self._gdrive_monitor.on_file_change = self._symlink_manager.handle_file_change
+            
+            logger.info("监控组件初始化完成")
+            
+        except Exception as e:
+            logger.error(f"监控组件初始化失败: {e}")
+            raise
     
-    @property
-    def symlink_manager(self) -> SymlinkManager:
-        """获取软链接管理器实例"""
-        if self._symlink_manager is None:
-            self._symlink_manager = SymlinkManager(
-                db_manager=self.db_manager,
-                config=self.config,
-                on_symlink_change=self.emby_notifier.notify_file_change if self._emby_notifier else None
-            )
-        return self._symlink_manager
-    
-    @property
-    def local_monitor(self) -> LocalMonitor:
-        """获取本地监控器实例"""
-        if self._local_monitor is None:
-            self._local_monitor = LocalMonitor(
-                db_manager=self.db_manager,
-                config=self.config,
-                on_file_change=self.symlink_manager.handle_file_change
-            )
-        return self._local_monitor
-    
-    @property
-    def gdrive_monitor(self) -> GoogleDriveMonitor:
-        """获取Google Drive监控器实例"""
-        if self._gdrive_monitor is None:
-            self._gdrive_monitor = GoogleDriveMonitor(
-                self.db_manager,
-                self.config,
-                self.symlink_manager.handle_file_change
-            )
-        return self._gdrive_monitor
-    
-    @property
-    def snapshot_generator(self) -> SnapshotGenerator:
-        """获取快照生成器实例"""
-        if self._snapshot_generator is None:
-            self._snapshot_generator = SnapshotGenerator(
-                db_manager=self.db_manager,
-                config=self.config
-            )
-        return self._snapshot_generator
-    
-    @property
-    def html_exporter(self) -> HtmlExporter:
-        """获取HTML导出器实例"""
+    def _init_html_exporter(self) -> HtmlExporter:
+        """初始化HTML导出器"""
         if self._html_exporter is None:
             self._html_exporter = HtmlExporter(
-                db_manager=self.db_manager,
-                config=self.config
+                self.db_manager,
+                self.config
             )
         return self._html_exporter
     
-    def _setup_signal_handlers(self) -> None:
-        """设置信号处理器"""
-        def signal_handler(signum, frame):
-            logger.info(f"收到信号: {signum}")
-            self.stop()
+    def export_html(self, output_path: str) -> bool:
+        """
+        导出HTML快照
         
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-    
-    def _full_scan(self) -> None:
-        """执行完整扫描"""
+        Args:
+            output_path: 输出文件路径
+            
+        Returns:
+            bool: 是否成功
+        """
         try:
-            logger.info("开始执行完整扫描...")
-            
-            # 1. 清理无效的软链接
-            self.symlink_manager.cleanup()
-            
-            # 2. 扫描目录并更新数据库
-            if not self.snapshot_generator.scan_directories():
-                logger.error("目录扫描失败")
-                return
-                
-            # 3. 根据数据库记录创建软链接
-            if not self.snapshot_generator.create_symlinks():
-                logger.error("创建软链接失败")
-                return
-            
-            logger.info("完整扫描完成")
+            html_exporter = self._init_html_exporter()
+            html_exporter.export_html(output_path)
+            logger.info(f"HTML快照已导出到: {output_path}")
+            return True
             
         except Exception as e:
-            logger.error(f"执行完整扫描失败: {e}")
-            return
+            logger.error(f"导出HTML快照失败: {e}")
+            return False
     
-    def start(self) -> None:
-        """启动GrayLink"""
+    def run(self):
+        """启动服务"""
         try:
-            if self._running:
-                logger.warning("GrayLink已经在运行")
+            logger.info("正在启动GrayLink...")
+            
+            # 检查服务是否已经在运行
+            if self._monitor_threads:
+                logger.warning("服务已在运行")
                 return
             
-            logger.info("正在启动GrayLink...")
-            self._setup_signal_handlers()
+            # 初始化监控组件
+            self._init_monitoring_components()
             
-            # 清理失效的软链接
-            self.symlink_manager.cleanup()
-            
-            # 启动本地监控线程
-            self.local_monitor_thread = threading.Thread(
-                target=self.local_monitor.run_forever,
+            # 启动本地监控
+            local_thread = threading.Thread(
+                target=self._local_monitor.run_forever,
                 name="LocalMonitor"
             )
-            self.local_monitor_thread.daemon = True
-            self.local_monitor_thread.start()
+            local_thread.daemon = True
+            local_thread.start()
+            self._monitor_threads.append(local_thread)
             
-            # 启动Google Drive监控线程
-            self.gdrive_monitor_thread = threading.Thread(
-                target=self.gdrive_monitor.run_forever,
-                name="GDriveMonitor"
-            )
-            self.gdrive_monitor_thread.daemon = True
-            self.gdrive_monitor_thread.start()
+            # 启动Google Drive监控
+            if self._gdrive_monitor:
+                gdrive_thread = threading.Thread(
+                    target=self._gdrive_monitor.run_forever,
+                    name="GoogleDriveMonitor"
+                )
+                gdrive_thread.daemon = True
+                gdrive_thread.start()
+                self._monitor_threads.append(gdrive_thread)
             
-            # 启动HTML定时导出
-            self.html_exporter.start_scheduler()
-            
-            self._running = True
-            logger.info("GrayLink启动完成")
+            # 等待线程结束或停止信号
+            while not self._stop_flag.is_set():
+                # 检查线程是否还在运行
+                for thread in self._monitor_threads[:]:
+                    if not thread.is_alive():
+                        logger.error(f"{thread.name} 已停止运行")
+                        self._monitor_threads.remove(thread)
+                
+                # 如果所有线程都停止了，退出循环
+                if not self._monitor_threads:
+                    logger.error("所有监控线程已停止")
+                    break
+                
+                time.sleep(1)
             
         except Exception as e:
-            logger.error(f"启动GrayLink失败: {e}")
+            logger.error(f"启动服务失败: {e}")
             self.stop()
             raise
     
-    def stop(self) -> None:
-        """停止GrayLink"""
-        if not self._running:
-            return
-            
-        logger.info("正在停止GrayLink...")
-        self._running = False
-        
-        # 停止监控器
-        self.local_monitor.stop()
-        self.gdrive_monitor.stop()
-        
-        # 停止HTML定时导出
+    def stop(self):
+        """停止服务"""
         try:
-            self.html_exporter.stop_scheduler()
+            logger.info("正在停止GrayLink...")
+            
+            # 设置停止标志
+            self._stop_flag.set()
+            
+            # 停止监控器
+            if hasattr(self, '_local_monitor') and self._local_monitor:
+                self._local_monitor.stop()
+            
+            if hasattr(self, '_gdrive_monitor') and self._gdrive_monitor:
+                self._gdrive_monitor.stop()
+            
+            # 等待所有线程结束
+            for thread in self._monitor_threads:
+                thread.join(timeout=5)
+                if thread.is_alive():
+                    logger.warning(f"{thread.name} 未能正常停止")
+            
+            # 清空线程列表
+            self._monitor_threads.clear()
+            
         except Exception as e:
-            logger.error(f"停止HTML定时导出时出错: {e}")
-        
-        # 等待线程结束
-        if self.local_monitor_thread:
-            self.local_monitor_thread.join()
-        if self.gdrive_monitor_thread:
-            self.gdrive_monitor_thread.join()
-        
-        # 关闭其他组件
-        self.emby_notifier.close()
-        
-        logger.info("GrayLink已停止")
+            logger.error(f"停止服务失败: {e}")
+            raise
     
-    def run(self) -> None:
-        """运行GrayLink"""
-        try:
-            self.start()
+    def _full_scan(self, skip_scan: bool = False) -> bool:
+        """
+        执行完整扫描
+        
+        Args:
+            skip_scan: 是否跳过扫描直接创建软链接
             
-            # 主线程等待
-            while self._running:
-                time.sleep(1)
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            logger.info("开始执行完整扫描..." if not skip_scan else "开始创建软链接...")
+            
+            # 初始化必要组件
+            if self._symlink_manager is None:
+                self._symlink_manager = SymlinkManager(
+                    self.db_manager,
+                    self.config
+                )
+            symlink_manager = self._symlink_manager
+            
+            snapshot_generator = SnapshotGenerator(
+                self.db_manager,
+                self.config
+            )
+            
+            # 清理无效的软链接
+            symlink_manager.cleanup()
+            
+            if skip_scan:
+                # 跳过扫描，直接创建软链接
+                if not snapshot_generator.create_symlinks():
+                    logger.error("创建软链接失败")
+                    return False
+            else:
+                # 扫描目录
+                if not snapshot_generator.scan_directories(skip_scan=False):
+                    logger.error("目录扫描失败")
+                    return False
                 
-        except KeyboardInterrupt:
-            logger.info("收到停止信号")
-        finally:
-            self.stop()
-
-    def export_html(self, output_path: str):
-        """导出HTML快照
-        
-        Args:
-            output_path: 输出文件路径
-        """
-        self.html_exporter.export_html(output_path)
+                # 创建软链接
+                if not snapshot_generator.create_symlinks():
+                    logger.error("创建软链接失败")
+                    return False
+            
+            logger.info("完整扫描完成" if not skip_scan else "软链接创建完成")
+            return True
+            
+        except Exception as e:
+            logger.error(f"执行完整扫描失败: {e}")
+            return False
     
-    def export_json(self, output_path: str):
-        """导出JSON快照
+    def export_json(self, output_path: str) -> bool:
+        """
+        导出JSON快照
         
         Args:
             output_path: 输出文件路径
+            
+        Returns:
+            bool: 是否成功
         """
-        self.html_exporter.export_json(output_path)
+        html_exporter = self._init_html_exporter()
+        return html_exporter.export_json(output_path)
 
 def main():
     """主函数"""

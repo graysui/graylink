@@ -1,7 +1,7 @@
 import os
 import time
 from typing import Optional, Callable, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -12,6 +12,12 @@ from config import Config
 
 class GoogleDriveMonitor:
     """Google Drive监控器"""
+    
+    # 定义所需的权限范围
+    SCOPES = [
+        'https://www.googleapis.com/auth/drive.readonly',         # 读取文件
+        'https://www.googleapis.com/auth/drive.activity.readonly' # 读取活动
+    ]
     
     def __init__(self, 
                  db_manager: DatabaseManager,
@@ -35,25 +41,52 @@ class GoogleDriveMonitor:
     def _load_credentials(self) -> None:
         """加载Google Drive API凭证"""
         try:
-            # 使用rclone格式的配置创建凭证
+            # 检查配置中是否启用了Google Drive
+            if not self.config.enable_gdrive:
+                raise ValueError("Google Drive功能未启用")
+            
+            # 检查配置中是否有令牌
+            if not self.config.gdrive_token:
+                raise ValueError("Google Drive令牌未配置")
+            
+            # 检查令牌格式
+            required_keys = {'access_token', 'refresh_token', 'token_type', 'expiry'}
+            if not all(key in self.config.gdrive_token for key in required_keys):
+                raise ValueError("Google Drive令牌格式不正确")
+            
+            # 解析expiry时间字符串为datetime对象
+            expiry = datetime.fromisoformat(self.config.gdrive_token['expiry'])
+            # 确保expiry是UTC时间
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            
+            # 使用配置中的凭证创建credentials
             creds = Credentials(
                 token=self.config.gdrive_token['access_token'],
                 refresh_token=self.config.gdrive_token['refresh_token'],
                 token_uri="https://oauth2.googleapis.com/token",
                 client_id=self.config.gdrive_client_id,
                 client_secret=self.config.gdrive_client_secret,
-                expiry=datetime.strptime(self.config.gdrive_token['expiry'], "%Y-%m-%dT%H:%M:%S.%f%z")
+                expiry=expiry,
+                scopes=self.SCOPES  # 添加权限范围
             )
             
-            # 如果凭证过期，刷新它
-            if creds.expired:
+            # 获取当前UTC时间
+            now = datetime.now(timezone.utc)
+            # 手动检查是否过期
+            if now >= expiry:
+                logger.info("Google Drive令牌已过期，正在刷新...")
                 creds.refresh(Request())
                 # 更新配置中的token
                 self.config.gdrive_token.update({
+                    'token_type': 'Bearer',
                     'access_token': creds.token,
                     'refresh_token': creds.refresh_token,
-                    'expiry': creds.expiry.isoformat()
+                    'expiry': creds.expiry.replace(tzinfo=timezone.utc).isoformat()
                 })
+                # 保存更新后的配置
+                self.config.save_to_yaml('config.yaml')
+                logger.info("Google Drive令牌已刷新并保存")
             
             # 创建Drive和Activity服务
             self.drive_service = build('drive', 'v3', credentials=creds)

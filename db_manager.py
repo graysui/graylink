@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Any
 from utils.logging_utils import logger
+import threading
 
 class DatabaseManager:
     def __init__(self, db_path: str):
@@ -13,6 +14,7 @@ class DatabaseManager:
             db_path: 数据库文件路径
         """
         self.db_path = db_path
+        self._connection_lock = threading.Lock()  # 添加数据库连接锁
         self._init_db()
     
     def _get_connection(self):
@@ -23,7 +25,7 @@ class DatabaseManager:
             sqlite3.Connection: 数据库连接对象
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30.0)  # 增加超时时间
             conn.row_factory = sqlite3.Row  # 使用字典形式返回结果
             return conn
         except sqlite3.Error as e:
@@ -67,6 +69,17 @@ class DatabaseManager:
                     start_time TEXT,
                     end_time TEXT,
                     error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            
+            # 创建扫描时间记录表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS scan_times (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT UNIQUE NOT NULL,
+                    last_scan_time TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -200,14 +213,16 @@ class DatabaseManager:
             bool: 操作是否成功
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                INSERT OR REPLACE INTO symlinks (source_path, link_path)
-                VALUES (?, ?)
-                ''', (source_path, link_path))
-                conn.commit()
-                return True
+            with self._connection_lock:  # 使用连接锁
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    now = datetime.now().isoformat()
+                    cursor.execute('''
+                    INSERT OR REPLACE INTO symlinks (source_path, link_path, created_at)
+                    VALUES (?, ?, ?)
+                    ''', (source_path, link_path, now))
+                    conn.commit()
+                    return True
         except sqlite3.Error as e:
             logger.error(f"添加软链接记录失败 {source_path} -> {link_path}: {e}")
             return False
@@ -385,31 +400,38 @@ class DatabaseManager:
     
     def list_all_files(self) -> List[Dict[str, Any]]:
         """
-        获取数据库中的所有文件记录
+        获取所有文件记录
         
         Returns:
-            List[Dict[str, Any]]: 文件信息列表，每个文件包含path、size和mtime
+            List[Dict[str, Any]]: 文件记录列表，每个文件包含:
+                - path: 文件路径
+                - size: 文件大小
+                - modified_time: 修改时间（Unix时间戳）
+                - mtime: modified_time的别名，用于兼容性
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT path, size, mtime
+                    SELECT path, size, modified_time
                     FROM files
                     ORDER BY path
                 """)
-                rows = cursor.fetchall()
                 
-                return [
-                    {
-                        'path': row[0],
-                        'size': row[1],
-                        'mtime': row[2]
-                    }
-                    for row in rows
-                ]
+                files = []
+                for row in cursor.fetchall():
+                    # 将 ISO 格式的时间字符串转换为时间戳
+                    dt = datetime.fromisoformat(row['modified_time'])
+                    timestamp = dt.timestamp()
+                    files.append({
+                        'path': row['path'],
+                        'size': row['size'],
+                        'modified_time': timestamp,
+                        'mtime': timestamp  # 为了兼容性添加 mtime 字段
+                    })
+                return files
                 
-        except Exception as e:
+        except sqlite3.Error as e:
             logger.error(f"获取所有文件记录失败: {e}")
             return []
     
@@ -434,4 +456,75 @@ class DatabaseManager:
                 
         except Exception as e:
             logger.error(f"查询软链接失败 {source_path}: {e}")
-            return [] 
+            return []
+    
+    def update_scan_time(self, path: str) -> None:
+        """
+        更新目录的最后扫描时间
+        
+        Args:
+            path: 目录路径
+        """
+        now = datetime.now().isoformat()
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO scan_times (path, last_scan_time, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    last_scan_time = ?,
+                    updated_at = ?
+            """, (path, now, now, now, now, now))
+            
+            conn.commit()
+    
+    def get_last_scan_time(self, path: str) -> Optional[datetime]:
+        """
+        获取目录的最后扫描时间
+        
+        Args:
+            path: 目录路径
+            
+        Returns:
+            Optional[datetime]: 最后扫描时间，如果不存在则返回None
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT last_scan_time
+                FROM scan_times
+                WHERE path = ?
+            """, (path,))
+            
+            row = cursor.fetchone()
+            if row and row[0]:
+                return datetime.fromisoformat(row[0])
+            return None
+    
+    def get_all_files(self) -> List[Dict[str, Any]]:
+        """
+        获取所有文件记录
+        
+        Returns:
+            List[Dict[str, Any]]: 文件记录列表，每个记录包含 path, size, modified_time 等信息
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT path, size, modified_time, hash, created_at, updated_at
+                FROM files
+                ORDER BY path
+            """)
+            
+            return [{
+                'path': row[0],
+                'size': row[1],
+                'modified_time': datetime.fromisoformat(row[2]) if row[2] else None,
+                'hash': row[3],
+                'created_at': row[4],
+                'updated_at': row[5]
+            } for row in cursor.fetchall()] 

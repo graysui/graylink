@@ -2,7 +2,7 @@ import os
 import time
 import threading
 from queue import Queue
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List
 from utils.logging_utils import logger
 from db_manager import DatabaseManager
@@ -97,13 +97,16 @@ class SnapshotGenerator:
                 return False
         
         # 检查文件扩展名是否匹配
-        ext = os.path.splitext(path)[1].lower()
-        for pattern in self.config.file_patterns:
-            if pattern.endswith(ext):
-                return True
-        
-        logger.debug(f"文件扩展名不匹配，跳过处理: {path}")
-        return False
+        ext = os.path.splitext(path)[1].lower()  # 获取扩展名（包含点号）
+        # 只处理视频文件
+        video_extensions = {'.mp4', '.mkv', '.avi', '.m4v', '.wmv', '.mov', '.flv', '.rmvb', '.rm', 
+                          '.3gp', '.ts', '.webm', '.vob', '.mts', '.m2ts', '.mpg', '.mpeg', '.m1v', 
+                          '.m2v', '.mp2', '.asf', '.ogm', '.ogv', '.f4v'}
+        if ext not in video_extensions:
+            logger.debug(f"非视频文件，跳过处理: {path}")
+            return False
+            
+        return True
     
     def _process_file(self, path: str) -> None:
         """处理单个文件"""
@@ -138,6 +141,7 @@ class SnapshotGenerator:
         try:
             # 获取目录内容
             items = os.listdir(path)
+            futures = []
             
             # 分别处理文件和目录
             for item in sorted(items):
@@ -149,7 +153,15 @@ class SnapshotGenerator:
                     
                 elif os.path.isfile(item_path):
                     # 提交文件处理任务到线程池
-                    executor.submit(self._process_file, item_path)
+                    future = executor.submit(self._process_file, item_path)
+                    futures.append(future)
+                    
+            # 等待当前目录的所有文件处理完成
+            for future in futures:
+                try:
+                    future.result()  # 等待任务完成并检查异常
+                except Exception as e:
+                    logger.error(f"处理文件失败: {e}")
                     
         except Exception as e:
             logger.error(f"处理目录失败 {path}: {e}")
@@ -168,23 +180,36 @@ class SnapshotGenerator:
             # 获取所有文件记录
             files = self.db_manager.get_all_files()
             total_links = 0
+            skipped_files = 0
             
             # 使用线程池创建软链接
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = []
+                
                 # 提交所有软链接创建任务
-                futures = [executor.submit(self._create_symlink, file_info['path']) 
-                         for file_info in files]
+                for file_info in files:
+                    # 再次检查文件类型，确保只为视频文件创建软链接
+                    if self._should_process_file(file_info['path']):
+                        future = executor.submit(self._create_symlink, file_info['path'])
+                        futures.append(future)
+                    else:
+                        skipped_files += 1
                 
                 # 等待所有任务完成
-                for _ in futures:
-                    total_links += 1
+                for future in futures:
+                    try:
+                        future.result()
+                        total_links += 1
+                    except Exception as e:
+                        logger.error(f"创建软链接失败: {e}")
             
             # 输出统计信息
             elapsed_time = time.time() - start_time
             logger.info(f"软链接创建完成:")
             logger.info(f"- 总链接数: {total_links}")
+            logger.info(f"- 跳过的非视频文件: {skipped_files}")
             logger.info(f"- 处理时间: {elapsed_time:.2f} 秒")
-            logger.info(f"- 处理速度: {total_links / elapsed_time:.2f} 链接/秒")
+            logger.info(f"- 处理速度: {total_links / elapsed_time:.2f if elapsed_time > 0 else 0} 链接/秒")
             
             return True
             
@@ -192,50 +217,62 @@ class SnapshotGenerator:
             logger.error(f"创建软链接失败: {e}")
             return False
     
-    def scan_directories(self) -> bool:
+    def scan_directories(self, skip_scan: bool = False) -> bool:
         """
-        扫描所有监控目录并处理文件
+        扫描目录并更新数据库
         
+        Args:
+            skip_scan: 是否跳过扫描直接创建软链接
+            
         Returns:
             bool: 是否成功
         """
         try:
-            logger.info("开始扫描监控目录")
-            self.start_time = time.time()
-            
-            # 重置统计信息
+            if skip_scan:
+                logger.info("跳过扫描，直接创建软链接...")
+                return True
+                
+            logger.info("开始扫描目录...")
             self.total_files = 0
             self.total_size = 0
+            futures = []  # 存储所有提交的任务
             
-            # 创建线程池
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # 处理每个监控目录
-                for monitor_path in self.config.monitor_paths:
-                    if not os.path.exists(monitor_path):
-                        logger.warning(f"监控目录不存在，跳过扫描: {monitor_path}")
+                for directory in self.config.monitor_paths:
+                    if not os.path.exists(directory):
+                        logger.warning(f"目录不存在: {directory}")
                         continue
                         
-                    logger.info(f"扫描目录: {monitor_path}")
-                    
+                    logger.info(f"扫描目录: {directory}")
+                    for root, _, files in os.walk(directory):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            # 提交任务并保存future对象
+                            future = executor.submit(self._process_file, file_path)
+                            futures.append(future)
+                            
+                            # 每处理100个文件输出一次进度
+                            if len(futures) % 100 == 0:
+                                completed = sum(1 for f in futures if f.done())
+                                logger.info(f"已处理: {completed}/{len(futures)} 文件")
+                
+                # 等待所有任务完成
+                for future in as_completed(futures):
                     try:
-                        # 处理目录
-                        self._process_directory(monitor_path, executor)
+                        # 获取任务结果
+                        result = future.result()
+                        if result:
+                            file_size = result
+                            self.total_files += 1
+                            self.total_size += file_size
                     except Exception as e:
-                        logger.error(f"扫描目录失败 {monitor_path}: {e}")
-                        continue
+                        logger.error(f"处理文件时发生错误: {e}")
             
-            # 输出统计信息
-            elapsed_time = time.time() - self.start_time
-            logger.info(f"目录扫描完成:")
-            logger.info(f"- 总文件数: {self.total_files}")
-            logger.info(f"- 总大小: {self.total_size / 1024 / 1024:.2f} MB")
-            logger.info(f"- 扫描时间: {elapsed_time:.2f} 秒")
-            logger.info(f"- 处理速度: {self.total_files / elapsed_time:.2f} 文件/秒")
-            
+            logger.info(f"扫描完成! 共处理 {self.total_files} 个文件, 总大小: {self.total_size / (1024*1024*1024):.2f} GB")
             return True
             
         except Exception as e:
-            logger.error(f"扫描目录失败: {e}")
+            logger.error(f"扫描目录时发生错误: {e}")
             return False
 
     def scan_directory(self, root_path: str) -> bool:

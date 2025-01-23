@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>GrayLink File System Snapshot</title>
+    
+    <script type="text/javascript">
+        /* --- jQuery 1.8.3 --- */
+        {% include 'js/jquery.min.js' %}
+        
+        /* --- jQuery UI 1.8.24 --- */
+        {% include 'js/jquery-ui.min.js' %}
+        
+        /* --- jQuery Cookie --- */
+        {% include 'js/jquery.cookie.js' %}
+        
+        /* --- Dynatree --- */
+        {% include 'js/jquery.dynatree.js' %}
+        
+        /* --- TableSorter --- */
+        {% include 'js/jquery.tablesorter.js' %}
+
+        // 目录数据对象
+        var D = {
+            dirs: [],
+            p: function(data) {
+                this.dirs.push(data);
+            }
+        };
+        
+        // 初始化目录数据
+        {{ directory_data | safe }}
+        
+        // 防抖函数
+        function debounce(func, wait) {
+            var timeout;
+            return function() {
+                var context = this, args = arguments;
+                clearTimeout(timeout);
+                timeout = setTimeout(function() {
+                    func.apply(context, args);
+                }, wait);
+            };
+        }
+        
+        // 格式化文件大小
+        function formatSize(bytes) {
+            if (typeof bytes !== 'number') return '0 B';
+            var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            var i = 0;
+            while(bytes >= 1024 && i < units.length - 1) {
+                bytes /= 1024;
+                i++;
+            }
+            return bytes.toFixed(1) + ' ' + units[i];
+        }
+        
+        // 格式化日期
+        function formatDate(timestamp) {
+            if (!timestamp) return '';
+            var date = new Date(timestamp * 1000);
+            return date.toLocaleString('zh-CN');
+        }
+        
+        // 构建树形数据
+        function buildTreeData(dirId) {
+            var result = [];
+            var dir = D.dirs[dirId];
+            if (!dir) return result;
+            
+            // 获取子目录
+            var subdirs = dir[dir.length-1].split("*").filter(Boolean);
+            
+            for(var i = 0; i < subdirs.length; i++) {
+                var subId = parseInt(subdirs[i]);
+                var subDir = D.dirs[subId];
+                if (!subDir) continue;
+                
+                var pathParts = subDir[0].split("*")[0].split("/");
+                var name = pathParts[pathParts.length - 1] || '根目录';
+                
+                result.push({
+                    title: name,
+                    key: subId,
+                    isFolder: true,
+                    children: buildTreeData(subId)
+                });
+            }
+            
+            return result;
+        }
+        
+        // 显示文件列表
+        function showFiles(dirId) {
+            var dir = D.dirs[dirId];
+            if (!dir) return;
+            
+            var html = "<table id='fileList' class='tablesorter'><thead><tr><th>名称</th><th>大小</th><th>修改时间</th></tr></thead><tbody>";
+            
+            // 添加文件
+            for(var i = 1; i < dir.length-2; i++) {
+                var file = dir[i].split("*");
+                if (file.length < 3) continue;
+                
+                var size = parseInt(file[1]) || 0;
+                var mtime = parseInt(file[2]) || 0;
+                
+                html += "<tr>";
+                html += "<td><span class='file'>" + (file[0] || '') + "</span></td>";
+                html += "<td>" + formatSize(size) + "</td>";
+                html += "<td>" + formatDate(mtime) + "</td>";
+                html += "</tr>";
+            }
+            
+            html += "</tbody></table>";
+            $("#files_container").html(html);
+            $("#fileList").tablesorter();
+            
+            // 显示当前目录路径
+            var currentDir = dir[0].split("*")[0];
+            $("#content_header").text("当前目录: " + currentDir);
+        }
+        
+        // 搜索文件
+        function searchFiles(query) {
+            if(!query) {
+                $("#tree").dynatree("getRoot").activate();
+                return;
+            }
+            
+            var html = "<table id='fileList' class='tablesorter'><thead><tr><th>名称</th><th>路径</th><th>大小</th><th>修改时间</th></tr></thead><tbody>";
+            var found = 0;
+            
+            for(var i = 0; i < D.dirs.length; i++) {
+                var dir = D.dirs[i];
+                if (!dir) continue;
+                
+                var dirPath = dir[0].split("*")[0];
+                
+                for(var j = 1; j < dir.length-2; j++) {
+                    var file = dir[j].split("*");
+                    if (file.length < 3) continue;
+                    
+                    if(file[0].toLowerCase().indexOf(query.toLowerCase()) !== -1) {
+                        var size = parseInt(file[1]) || 0;
+                        var mtime = parseInt(file[2]) || 0;
+                        
+                        html += "<tr>";
+                        html += "<td><span class='file'>" + (file[0] || '') + "</span></td>";
+                        html += "<td>" + dirPath + "</td>";
+                        html += "<td>" + formatSize(size) + "</td>";
+                        html += "<td>" + formatDate(mtime) + "</td>";
+                        html += "</tr>";
+                        found++;
+                    }
+                }
+            }
+            
+            html += "</tbody></table>";
+            $("#files_container").html(html);
+            $("#fileList").tablesorter();
+            $("#content_header").text("找到 " + found + " 个文件");
+        }
+        
+        // 初始化
+        $(document).ready(function() {
+            try {
+                // 初始化树形视图
+                $("#tree").dynatree({
+                    children: buildTreeData(0),
+                    onActivate: function(node) {
+                        showFiles(node.data.key);
+                    },
+                    debugLevel: 0
+                });
+                
+                // 搜索功能
+                $("#search").on("input", debounce(function() {
+                    var query = $(this).val();
+                    searchFiles(query);
+                }, 300));
+                
+                // 隐藏加载提示
+                $("#loading").hide();
+                
+            } catch(e) {
+                console.error("初始化失败:", e);
+                $("#loading").text("加载失败: " + e.message);
+            }
+        });
+    </script>
+    
+    <style>
+        /* 基本样式 */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f5f5f5;
+        }
+        
+        /* 头部样式 */
+        #header {
+            background: #333;
+            color: #fff;
+            padding: 15px;
+            position: fixed;
+            width: 100%;
+            top: 0;
+            z-index: 100;
+        }
+        
+        #header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        
+        .header_stats {
+            font-size: 12px;
+            color: #ccc;
+            margin-top: 5px;
+        }
+        
+        /* 内容区域样式 */
+        #wrapper {
+            display: flex;
+            margin-top: 80px;
+            height: calc(100vh - 80px);
+        }
+        
+        /* 树形视图样式 */
+        #tree {
+            width: 300px;
+            background: #fff;
+            border-right: 1px solid #ddd;
+            overflow: auto;
+            padding: 10px;
+        }
+        
+        /* 文件列表样式 */
+        #content {
+            flex: 1;
+            background: #fff;
+            padding: 10px;
+            overflow: auto;
+        }
+        
+        #content_header {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+            font-weight: bold;
+        }
+        
+        #files_container {
+            padding: 10px;
+        }
+        
+        /* 表格样式 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        th {
+            background: #f8f8f8;
+        }
+        
+        /* 搜索框样式 */
+        #search {
+            padding: 10px;
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            margin-bottom: 10px;
+        }
+        
+        /* 加载提示 */
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            z-index: 1000;
+        }
+
+        /* dynatree 样式 */
+        span.dynatree-empty,
+        span.dynatree-vline,
+        span.dynatree-connector,
+        span.dynatree-expander,
+        span.dynatree-icon,
+        span.dynatree-checkbox,
+        span.dynatree-radio,
+        span.dynatree-drag-helper-img,
+        #dynatree-drop-marker {
+            width: 16px;
+            height: 16px;
+            display: inline-block;
+            vertical-align: top;
+            background-repeat: no-repeat;
+            background-position: left;
+            background-image: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABwCAYAAACuE3ZzAAAA+UlEQVR4nO3YYY6CMBSG4fcMF+Dm3oGLewcu7h24OBfAw3QYxgR/tNKWtlDfJ2kIhpB+FNIy+6uqah5QI6//KqABNIAG0AAaQANoAA2gATSABtAAGkADaAANoAE0gAbQABpAA2gADaABNIAG0AAaQANoAA2gATSABtAAGkADaAANoAE0gAbQABpAA2gADaABNIAG0AAaQANoAA2gATSABtAAGkADaAANoAE0gAbQABpAA2gADaABNIAG0AAaQANoAA2gATSABtAAGkADaAANoAE0gAbQABpAA2gADaABNIAG0AAaQANoAA2gATSABtAAGkADaAANoAE0gAbQABpAA2gADaABNIAG0AAaQANoAA2gATSABtAAGkADaAANoAE0gAbQABpAA2gADaABNIAG0AAaQANoAA2gATSABtAAGkADaAANoAE0wD4BEhAR1d0n5BMAAAAASUVORK5CYII=);
+        }
+
+        ul.dynatree-container {
+            font-family: tahoma, arial, helvetica;
+            font-size: 10pt;
+            white-space: nowrap;
+            padding: 3px;
+            margin: 0;
+            background-color: white;
+            border: 1px solid gray;
+            overflow: auto;
+            height: 100%;
+        }
+
+        ul.dynatree-container ul {
+            padding: 0 0 0 16px;
+            margin: 0;
+        }
+
+        ul.dynatree-container li {
+            list-style-image: none;
+            list-style-position: outside;
+            list-style-type: none;
+            -moz-background-clip: border;
+            -moz-background-inline-policy: continuous;
+            -moz-background-origin: padding;
+            background-attachment: scroll;
+            background-color: transparent;
+            background-position: 0 0;
+            background-repeat: repeat-y;
+            background-image: none;
+            margin: 0;
+            padding: 1px 0 0 0;
+        }
+
+        .dynatree-expander {
+            background-position: 0px -80px;
+            cursor: pointer;
+        }
+
+        .dynatree-expander:hover {
+            background-position: -16px -80px;
+        }
+
+        .dynatree-node {
+            display: inline-block;
+            white-space: nowrap;
+            margin: 0;
+            padding: 0;
+        }
+
+        .dynatree-title {
+            color: black;
+            display: inline-block;
+            vertical-align: top;
+            padding: 0 3px;
+            margin: 0;
+            cursor: pointer;
+        }
+
+        /* 表格排序样式 */
+        .tablesorter-header {
+            background-image: url(data:image/gif;base64,R0lGODlhFQAJAIAAACMtMP///yH5BAEAAAEALAAAAAAVAAkAAAIXjI+AywnaYnhUMoqt3gZXPmVg94yJVQAAOw==);
+            background-repeat: no-repeat;
+            background-position: center right;
+            padding: 4px 18px 4px 4px;
+            white-space: normal;
+            cursor: pointer;
+        }
+
+        .tablesorter-headerAsc {
+            background-image: url(data:image/gif;base64,R0lGODlhFQAEAIAAACMtMP///yH5BAEAAAEALAAAAAAVAAQAAAINjI8Bya2wnINUMopZAQA7);
+        }
+
+        .tablesorter-headerDesc {
+            background-image: url(data:image/gif;base64,R0lGODlhFQAEAIAAACMtMP///yH5BAEAAAEALAAAAAAVAAQAAAINjB+gC+jP2ptn0WskLQA7);
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>GrayLink File System Snapshot</h1>
+        <div class="header_stats">
+            <span>{{ total_files }} 个文件，{{ total_dirs }} 个目录，总大小 {{ '{:.2f}'.format(total_size / (1024**3)) }} GB</span><br>
+            <span>生成时间: {{ generated_at }}</span>
+        </div>
+    </div>
+    
+    <div id="loading">加载中...</div>
+    
+    <div id="wrapper">
+        <div id="tree"></div>
+        <div id="content">
+            <input type="text" id="search" placeholder="搜索文件...">
+            <div id="content_header"></div>
+            <div id="files_container"></div>
+        </div>
+    </div>
+</body>
+</html> 
