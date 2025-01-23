@@ -56,16 +56,16 @@ gdrive_root_path: "/media/nastool"                       # Google Drive 根路�
 local_root_path: "/mnt/9w/media/nastool"                 # 本地挂载路径
 gdrive_polling_interval: 3600                            # Google Drive查询间隔(秒)，默认1小时
 gdrive_query_buffer_time: 300                            # Google Drive查询缓冲时间(秒)，默认5分钟
-gdrive_client_id: "460886178493-iosmlmtfplblq1lreaunqk337s5jdtbn.apps.googleusercontent.com"                                     # Google Drive 客户端ID
-gdrive_client_secret: "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"                                 # Google Drive 客户端密钥
-gdrive_token: {"access_token":"ya29.a0ARW5m772lyjvst5b3qJGM476E9HHNwgArGalw9XPuhGEc40E-JkxvfjeBJkN_eDcIUOG-3suLrYhYIaRZjX-xYhO5kJKM--3NoSFJ9HpJ21JW8Wye1lnU2z7NR6H3CmM-ywS1OkEas8vIQtyoo0HW_Lb3z8tooeIvBiApMDONgaCgYKAcYSARESFQHGX2MiLa_yajboUM7NAwo549u4BA0177","token_type":"Bearer","refresh_token":"1//0ed-RDfT-pyOICgYIARAAGA4SNwF-L9IrkpD4Rg1N50vVjdCcT19ToQf4wjAYWC1zZgN81OtZlHMeFUvuUDWx62HwxIdxdxqibyY","expiry":"2025-01-18T04:24:32.19743-05:00"}                                         # Google Drive 访问令牌
+gdrive_client_id: "*****"                                     # Google Drive 客户端ID
+gdrive_client_secret: "*****"                                 # Google Drive 客户端密钥
+gdrive_token: {"****"}                                         # Google Drive 访问令牌
 gdrive_team_drive_id: null                              # 团队云端硬盘ID
 gdrive_root_folder_id: null                             # 根文件夹ID
 gdrive_scope: "https://www.googleapis.com/auth/drive.readonly"  # API权限范围
 
 # Emby配置
-emby_host: "http://152.67.215.214:8096"                       # Emby服务器地址
-emby_api_key: "cef414e5c9c6426fa3c71f9a28153ebd"                                       # Emby API密钥
+emby_host: "http://****:8096"                       # Emby服务器地址
+emby_api_key: "****"                                       # Emby API密钥
 
 # 本地监控配置
 local_polling_interval: 300                              # 本地文件轮询间隔（秒）
